@@ -116,7 +116,7 @@ def _fire_alert_async(title, message):
 
 
 # ─── PRICE CHANGE ALERT (automatic, no user setup needed) ────────────────────
-def check_price_spike(current_price, previous_price, threshold_pct=2.0):
+def check_price_spike(current_price, previous_price, threshold_pct=5.0):
     # Check if spike alerts are enabled
     from database.db_manager import get_setting
     if get_setting('spike_alerts_enabled') == 'off':

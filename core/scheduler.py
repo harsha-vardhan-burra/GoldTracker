@@ -2,8 +2,9 @@ import sys
 import os
 import time
 import threading
-from core.alert_engine import check_alerts, check_price_spike
-from core.weekly_summary import send_weekly_summary_if_due
+from alert_engine import check_alerts, check_price_spike
+from weekly_summary import send_weekly_summary_if_due
+from news_engine import get_news_context
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.data_engine  import fetch_all
@@ -53,6 +54,14 @@ def run_cycle():
 
         # Step 7: Weekly summary (Sundays only)
         send_weekly_summary_if_due()
+
+        # Step 8: Fetch news context (hourly)
+        news = get_news_context()
+        if news and news.get('reasoning'):
+            # Append news reasoning to explanation
+            current_explanation = data.get('explanation') or ''
+            data['explanation'] = f"{current_explanation} · {news['reasoning']}" \
+                                  if current_explanation else news['reasoning']
 
         # Return full result including labels for UI to use
         data['buy_label']  = analytics['buy_label']

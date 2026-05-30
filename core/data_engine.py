@@ -33,25 +33,42 @@ SCRAPE_HEADERS = {
 
 # ─── FETCH 1: Gold spot price in USD ─────────────────────────────────────────
 def fetch_spot_price_usd():
+    # ── Primary: GoldAPI.io ──
     try:
         api_key = load_api_key()
-        url = 'https://www.goldapi.io/api/XAU/USD'
+        url     = 'https://www.goldapi.io/api/XAU/USD'
         headers = {'x-access-token': api_key}
-        r = requests.get(url, headers=headers, timeout=10)
+        r       = requests.get(url, headers=headers, timeout=10)
 
         if r.status_code == 200:
-            data = r.json()
-            price_oz  = data.get('price', 0)
-            price_gram = round(price_oz / 31.1035, 4)   # convert troy oz to gram
+            data       = r.json()
+            price_oz   = data.get('price', 0)
+            price_gram = round(price_oz / 31.1035, 4)
             print(f'[GoldAPI] Spot: ${price_oz}/oz → ${price_gram}/gram')
             return price_oz, price_gram
         else:
-            print(f'[GoldAPI] Failed: {r.status_code}')
-            return None, None
+            print(f'[GoldAPI] Failed: {r.status_code} — trying fallback')
 
     except Exception as e:
-        print(f'[GoldAPI] Error: {e}')
-        return None, None
+        print(f'[GoldAPI] Error: {e} — trying fallback')
+
+    # ── Fallback: gold-api.com (no key needed) ──
+    try:
+        r = requests.get('https://api.gold-api.com/price/XAU', timeout=10)
+
+        if r.status_code == 200:
+            data       = r.json()
+            price_oz   = data.get('price', 0)
+            price_gram = round(price_oz / 31.1035, 4)
+            print(f'[GoldAPI Fallback] Spot: ${price_oz}/oz → ${price_gram}/gram')
+            return price_oz, price_gram
+        else:
+            print(f'[GoldAPI Fallback] Failed: {r.status_code}')
+
+    except Exception as e:
+        print(f'[GoldAPI Fallback] Error: {e}')
+
+    return None, None
 
 
 # ─── FETCH 2: USD to INR exchange rate ───────────────────────────────────────
@@ -158,6 +175,12 @@ def fetch_all():
     usd_inr                    = fetch_usd_inr()
     retail_price               = fetch_retail_price()
     price_24k, price_22k       = calculate_inr_prices(spot_usd_gram, usd_inr)
+
+     # ── Fallback: if GoldAPI fails, use retail as primary ──
+    if not price_24k and retail_price:
+        print('[DataEngine] GoldAPI unavailable — using retail as primary price')
+        price_24k = retail_price
+        price_22k = round(retail_price * (22/24), 2)
 
     result = {
         'spot_usd':     round(spot_usd_oz, 2)   if spot_usd_oz   else None,

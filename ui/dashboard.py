@@ -316,6 +316,83 @@ class Dashboard(ctk.CTk):
         self.ins_usd_inr= self._make_insight(insights, 'USD / INR',     '---', 1)
         self.ins_status = self._make_insight(insights, 'POLL STATUS',   'Active', 2)
 
+        # ── News Headlines ──
+        news_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=12)
+        news_frame.pack(fill='x', padx=24, pady=(0, 20))
+
+        ctk.CTkLabel(news_frame, text='MARKET NEWS',
+            font=ctk.CTkFont(size=11, weight='bold'), text_color=SUBTEXT
+        ).pack(anchor='w', padx=16, pady=(12, 8))
+
+        self.news_container = ctk.CTkFrame(news_frame, fg_color='transparent')
+        self.news_container.pack(fill='x', padx=16, pady=(0, 12))
+
+        self.news_loading = ctk.CTkLabel(
+            self.news_container,
+            text='Fetching market news...',
+            font=ctk.CTkFont(size=11),
+            text_color=SUBTEXT
+        )
+        self.news_loading.pack(anchor='w')
+
+        # Fetch news in background
+        import threading
+        threading.Thread(target=self._fetch_news_display, daemon=True).start()
+
+    def _fetch_news_display(self):
+        try:
+            from core.news_engine import get_news_context
+            result = get_news_context(force=True)
+
+            def update():
+                for w in self.news_container.winfo_children():
+                    w.destroy()
+
+                if not result or not result.get('headlines'):
+                    ctk.CTkLabel(self.news_container,
+                        text='No news available — check GNews API key in settings.json',
+                        font=ctk.CTkFont(size=11), text_color=SUBTEXT
+                    ).pack(anchor='w')
+                    return
+
+                # Reasoning line
+                if result.get('reasoning'):
+                    ctk.CTkLabel(self.news_container,
+                        text=f"💡 {result['reasoning']}",
+                        font=ctk.CTkFont(size=12, weight='bold'),
+                        text_color=GOLD,
+                        wraplength=780,
+                        justify='left'
+                    ).pack(anchor='w', pady=(0, 8))
+
+                # Headlines
+                for h in result['headlines']:
+                    row = ctk.CTkFrame(
+                        self.news_container,
+                        fg_color=CARD2, corner_radius=8
+                    )
+                    row.pack(fill='x', pady=3)
+
+                    ctk.CTkLabel(row,
+                        text=h['title'],
+                        font=ctk.CTkFont(size=11),
+                        text_color=TEXT,
+                        wraplength=680,
+                        justify='left',
+                        anchor='w'
+                    ).pack(side='left', padx=12, pady=8, fill='x', expand=True)
+
+                    ctk.CTkLabel(row,
+                        text=f"{h['source']} · {h['published']}",
+                        font=ctk.CTkFont(size=10),
+                        text_color=SUBTEXT
+                    ).pack(side='right', padx=12)
+
+            self.after(0, update)
+
+        except Exception as e:
+            print(f'[Dashboard] News fetch error: {e}')
+
         # Update display with current data
         if self.current_data:
             self._refresh_dashboard_display(self.current_data)
@@ -1229,6 +1306,20 @@ class Dashboard(ctk.CTk):
             command=self._toggle_summary
         ).pack(side='right', padx=16)
 
+        news_row = self._settings_row(p, 'News Correlation', 'Show gold market news context in signals')
+        self.news_var = ctk.StringVar(
+            value=get_setting('news_enabled') or 'on'
+        )
+        ctk.CTkSwitch(
+            news_row,
+            text='',
+            variable=self.news_var,
+            onvalue='on',
+            offvalue='off',
+            progress_color=GOLD_DARK,
+            command=self._toggle_news
+        ).pack(side='right', padx=16)
+
         # ── Save button ──
         ctk.CTkButton(
             p,
@@ -1343,6 +1434,10 @@ class Dashboard(ctk.CTk):
 
     def _toggle_summary(self):
         update_setting('weekly_summary_enabled', self.summary_var.get())
+
+    def _toggle_news(self):
+        update_setting('news_enabled', self.news_var.get())
+
 # ─── Run ─────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     app = Dashboard()

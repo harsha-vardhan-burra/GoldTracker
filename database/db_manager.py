@@ -75,6 +75,8 @@ def initialize_database():
         ('spike_alerts_enabled',    'on'),
         ('weekly_summary_enabled',  'on'),
         ('weekly_summary_last_sent', ''),
+        ('news_enabled',      'on'),
+        ('news_last_fetched', ''),
     ]
     cursor.executemany('''
         INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
