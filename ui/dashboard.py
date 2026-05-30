@@ -106,11 +106,12 @@ class Dashboard(ctk.CTk):
 
         self.tab_buttons = {}
         tabs = [
-            ('dashboard', '📊  Dashboard'),
-            ('charts',    '📈  Charts'),
-            ('alerts',    '🔔  Alerts'),
-            ('history',   '🕐  History'),
-            ('settings',  '⚙️   Settings'),
+            ('dashboard',  '📊  Dashboard'),
+            ('charts',     '📈  Charts'),
+            ('alerts',     '🔔  Alerts'),
+            ('portfolio',  '💰  Portfolio'),
+            ('history',    '🕐  History'),
+            ('settings',   '⚙️   Settings'),
         ]
 
         for key, label in tabs:
@@ -202,6 +203,7 @@ class Dashboard(ctk.CTk):
             'dashboard': self._build_dashboard_tab,
             'charts':    self._build_charts_tab,
             'alerts':    self._build_alerts_tab,
+            'portfolio': self._build_portfolio_tab,
             'history':   self._build_history_tab,
             'settings':  self._build_settings_tab,
         }
@@ -638,6 +640,284 @@ class Dashboard(ctk.CTk):
                 font=ctk.CTkFont(size=10), text_color=SUBTEXT
             ).pack(side='left', padx=8)
 
+    # =========================================================================
+    # TAB 3.5 — PORTFOLIO
+    # =========================================================================
+    def _build_portfolio_tab(self):
+        p = self.content_frame
+
+        ctk.CTkLabel(p, text='Portfolio Tracker',
+            font=ctk.CTkFont(size=22, weight='bold'), text_color=TEXT
+        ).pack(anchor='w', padx=24, pady=(20, 4))
+
+        ctk.CTkLabel(p, text='Track your gold purchases and monitor real-time P&L',
+            font=ctk.CTkFont(size=11), text_color=SUBTEXT
+        ).pack(anchor='w', padx=24, pady=(0, 16))
+
+        # ── Summary Cards ──
+        summary_row = ctk.CTkFrame(p, fg_color='transparent')
+        summary_row.pack(fill='x', padx=24, pady=(0, 12))
+        for i in range(4):
+            summary_row.columnconfigure(i, weight=1)
+
+        self.port_grams    = self._make_card(summary_row, 'TOTAL GRAMS',    '---', 'grams owned',    GOLD,      0)
+        self.port_invested = self._make_card(summary_row, 'TOTAL INVESTED', '---', 'amount spent',   '#FF9800',  1)
+        self.port_value    = self._make_card(summary_row, 'CURRENT VALUE',  '---', 'at market price', BLUE,      2)
+        self.port_pnl      = self._make_card(summary_row, 'PROFIT / LOSS',  '---', 'unrealised',      GREEN,     3)
+
+        # ── Add Purchase Form ──
+        form = ctk.CTkFrame(p, fg_color=CARD, corner_radius=12)
+        form.pack(fill='x', padx=24, pady=(0, 12))
+
+        ctk.CTkLabel(form, text='ADD PURCHASE',
+            font=ctk.CTkFont(size=11, weight='bold'), text_color=SUBTEXT
+        ).pack(anchor='w', padx=16, pady=(14, 10))
+
+        # Row 1 — date, karat, grams
+        row1 = ctk.CTkFrame(form, fg_color='transparent')
+        row1.pack(fill='x', padx=16, pady=(0, 10))
+
+        ctk.CTkLabel(row1, text='Date:',
+            font=ctk.CTkFont(size=12), text_color=TEXT, width=50
+        ).pack(side='left', padx=(0, 6))
+
+        self.port_date = ctk.CTkEntry(row1,
+            placeholder_text='YYYY-MM-DD',
+            width=130, height=36
+        )
+        # Auto-fill today's date
+        import datetime
+        self.port_date.insert(0, datetime.date.today().strftime('%Y-%m-%d'))
+        self.port_date.pack(side='left', padx=(0, 16))
+
+        ctk.CTkLabel(row1, text='Karat:',
+            font=ctk.CTkFont(size=12), text_color=TEXT, width=50
+        ).pack(side='left', padx=(0, 6))
+
+        self.port_karat = ctk.CTkOptionMenu(
+            row1,
+            values=['24K', '22K', '18K'],
+            fg_color=CARD2, button_color=GOLD_DARK,
+            width=90, height=36
+        )
+        self.port_karat.pack(side='left', padx=(0, 16))
+
+        ctk.CTkLabel(row1, text='Grams:',
+            font=ctk.CTkFont(size=12), text_color=TEXT, width=55
+        ).pack(side='left', padx=(0, 6))
+
+        self.port_grams_entry = ctk.CTkEntry(row1,
+            placeholder_text='e.g. 10',
+            width=100, height=36
+        )
+        self.port_grams_entry.pack(side='left')
+
+        # Row 2 — price, notes
+        row2 = ctk.CTkFrame(form, fg_color='transparent')
+        row2.pack(fill='x', padx=16, pady=(0, 10))
+
+        ctk.CTkLabel(row2, text='Price/gram (₹):',
+            font=ctk.CTkFont(size=12), text_color=TEXT, width=110
+        ).pack(side='left', padx=(0, 6))
+
+        self.port_price_entry = ctk.CTkEntry(row2,
+            placeholder_text='e.g. 9250',
+            width=130, height=36
+        )
+        self.port_price_entry.pack(side='left', padx=(0, 16))
+
+        ctk.CTkLabel(row2, text='Notes:',
+            font=ctk.CTkFont(size=12), text_color=TEXT, width=50
+        ).pack(side='left', padx=(0, 6))
+
+        self.port_notes_entry = ctk.CTkEntry(row2,
+            placeholder_text='optional (e.g. wedding purchase)',
+            width=220, height=36
+        )
+        self.port_notes_entry.pack(side='left')
+
+        # Add button + message
+        btn_row = ctk.CTkFrame(form, fg_color='transparent')
+        btn_row.pack(fill='x', padx=16, pady=(0, 14))
+
+        ctk.CTkButton(
+            btn_row,
+            text='Add Purchase',
+            fg_color=GOLD_DARK, hover_color=GOLD,
+            text_color='black',
+            font=ctk.CTkFont(weight='bold'),
+            width=140, height=36,
+            command=self._add_purchase
+        ).pack(side='left')
+
+        self.port_msg = ctk.CTkLabel(btn_row, text='',
+            font=ctk.CTkFont(size=11), text_color=GREEN)
+        self.port_msg.pack(side='left', padx=16)
+
+        # ── Purchase History ──
+        ctk.CTkLabel(p, text='Purchase History',
+            font=ctk.CTkFont(size=15, weight='bold'), text_color=TEXT
+        ).pack(anchor='w', padx=24, pady=(8, 8))
+
+        # Table header
+        header = ctk.CTkFrame(p, fg_color=CARD2, corner_radius=8)
+        header.pack(fill='x', padx=24, pady=(0, 4))
+
+        cols   = ['Date', 'Karat', 'Grams', 'Buy Price', 'Invested', 'Current Val', 'P&L', '']
+        widths = [100,     60,      70,       100,         110,        110,           100,    50]
+
+        for col, w in zip(cols, widths):
+            ctk.CTkLabel(header, text=col,
+                font=ctk.CTkFont(size=11, weight='bold'),
+                text_color=SUBTEXT, width=w, anchor='w'
+            ).pack(side='left', padx=6, pady=8)
+
+        # Rows
+        self.port_list_frame = ctk.CTkFrame(p, fg_color='transparent')
+        self.port_list_frame.pack(fill='x', padx=24)
+        self._render_portfolio_rows()
+
+        # Update summary
+        self._update_portfolio_summary()
+
+
+    def _add_purchase(self):
+        try:
+            from database.db_manager import add_purchase
+            import datetime
+
+            date_str = self.port_date.get().strip()
+            karat    = self.port_karat.get()
+            grams    = float(self.port_grams_entry.get().strip())
+            price    = float(self.port_price_entry.get().strip().replace(',','').replace('₹',''))
+            notes    = self.port_notes_entry.get().strip()
+
+            # Validate date
+            datetime.date.fromisoformat(date_str)
+
+            add_purchase(date_str, karat, grams, price, notes)
+
+            # Clear entries
+            self.port_grams_entry.delete(0, 'end')
+            self.port_price_entry.delete(0, 'end')
+            self.port_notes_entry.delete(0, 'end')
+
+            self.port_msg.configure(
+                text=f"✓ Added {grams}g of {karat} at ₹{price:,.0f}/gram",
+                text_color=GREEN
+            )
+            self._render_portfolio_rows()
+            self._update_portfolio_summary()
+
+        except ValueError as e:
+            self.port_msg.configure(
+                text=f'Invalid input — check date format and numbers',
+                text_color=RED
+            )
+
+
+    def _render_portfolio_rows(self):
+        for w in self.port_list_frame.winfo_children():
+            w.destroy()
+
+        from database.db_manager import get_portfolio, delete_purchase
+
+        purchases = get_portfolio()
+
+        if not purchases:
+            ctk.CTkLabel(self.port_list_frame,
+                text='No purchases yet. Add your first purchase above.',
+                font=ctk.CTkFont(size=12), text_color=SUBTEXT
+            ).pack(pady=16)
+            return
+
+        current_price = self.current_data.get('price_24k') or 0
+
+        for p in purchases:
+            karat        = p['karat']
+            grams        = p['grams']
+            buy_price    = p['price_per_gram']
+            invested     = p['total_invested']
+
+            # Calculate current value based on karat
+            if karat == '24K':
+                curr_price = current_price
+            elif karat == '22K':
+                curr_price = current_price * (22/24)
+            else:
+                curr_price = current_price * (18/24)
+
+            current_val = round(grams * curr_price, 2) if curr_price else 0
+            pnl         = round(current_val - invested, 2) if curr_price else 0
+            pnl_pct     = round((pnl / invested) * 100, 2) if invested else 0
+            pnl_color   = GREEN if pnl >= 0 else RED
+
+            row = ctk.CTkFrame(self.port_list_frame, fg_color=CARD, corner_radius=8)
+            row.pack(fill='x', pady=3)
+
+            values = [
+                p['purchase_date'],
+                karat,
+                f"{grams}g",
+                f"₹{buy_price:,.0f}",
+                f"₹{invested:,.0f}",
+                f"₹{current_val:,.0f}" if curr_price else '---',
+                f"{'+'if pnl>=0 else ''}₹{pnl:,.0f} ({pnl_pct:+.1f}%)" if curr_price else '---',
+            ]
+            colors = [SUBTEXT, GOLD, TEXT, TEXT, TEXT, BLUE, pnl_color]
+            widths = [100, 60, 70, 100, 110, 110, 100]
+
+            for val, color, w in zip(values, colors, widths):
+                ctk.CTkLabel(row, text=val,
+                    font=ctk.CTkFont(size=11),
+                    text_color=color, width=w, anchor='w'
+                ).pack(side='left', padx=6, pady=8)
+
+            # Delete button
+            pid = p['id']
+            ctk.CTkButton(row,
+                text='✕', width=40, height=28,
+                fg_color='transparent',
+                hover_color='#cc0000',
+                text_color=SUBTEXT,
+                command=lambda i=pid: self._delete_purchase(i)
+            ).pack(side='left', padx=4)
+
+
+    def _delete_purchase(self, purchase_id):
+        from database.db_manager import delete_purchase
+        delete_purchase(purchase_id)
+        self._render_portfolio_rows()
+        self._update_portfolio_summary()
+
+
+    def _update_portfolio_summary(self):
+        from database.db_manager import get_portfolio_summary, get_portfolio
+
+        summary = get_portfolio_summary()
+        if not summary or not summary['total_grams']:
+            return
+
+        total_grams    = summary['total_grams'] or 0
+        total_invested = summary['total_invested'] or 0
+        current_price  = self.current_data.get('price_24k') or 0
+        current_value  = round(total_grams * current_price, 2) if current_price else 0
+        pnl            = round(current_value - total_invested, 2) if current_price else 0
+        pnl_color      = GREEN if pnl >= 0 else RED
+
+        if hasattr(self, 'port_grams'):
+            self.port_grams.configure(text=f"{total_grams:.2f}g")
+        if hasattr(self, 'port_invested'):
+            self.port_invested.configure(text=f"₹{total_invested:,.0f}")
+        if hasattr(self, 'port_value'):
+            self.port_value.configure(
+                text=f"₹{current_value:,.0f}" if current_price else '---'
+            )
+        if hasattr(self, 'port_pnl'):
+            self.port_pnl.configure(
+                text=f"{'+'if pnl>=0 else ''}₹{pnl:,.0f}" if current_price else '---',
+                text_color=pnl_color
+            )
 
     # =========================================================================
     # TAB 4 — HISTORY

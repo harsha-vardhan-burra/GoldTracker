@@ -75,7 +75,19 @@ def initialize_database():
     cursor.executemany('''
         INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
     ''', defaults)
-
+    # Portfolio table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS portfolio (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_date   DATE NOT NULL,
+            karat           TEXT NOT NULL,
+            grams           REAL NOT NULL,
+            price_per_gram  REAL NOT NULL,
+            total_invested  REAL NOT NULL,
+            notes           TEXT,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
     print('Database initialized successfully at:', DB_PATH)
@@ -176,11 +188,81 @@ def trigger_alert(alert_id):
     conn.commit()
     conn.close()
 
+def initialize_portfolio_table():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS portfolio (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_date   DATE NOT NULL,
+            karat           TEXT NOT NULL,
+            grams           REAL NOT NULL,
+            price_per_gram  REAL NOT NULL,
+            total_invested  REAL NOT NULL,
+            notes           TEXT,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+def add_purchase(purchase_date, karat, grams, price_per_gram, notes=''):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO portfolio (
+            purchase_date, karat, grams, 
+            price_per_gram, total_invested, notes
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    ''', (
+        purchase_date, karat, grams,
+        price_per_gram,
+        round(grams * price_per_gram, 2),
+        notes
+    ))
+    conn.commit()
+    conn.close()
+
+
+def get_portfolio():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM portfolio 
+        ORDER BY purchase_date DESC
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_purchase(purchase_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM portfolio WHERE id = ?', (purchase_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_portfolio_summary():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT 
+            SUM(grams)          as total_grams,
+            SUM(total_invested) as total_invested,
+            AVG(price_per_gram) as avg_buy_price
+        FROM portfolio
+    ''')
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 # --- Quick test ---
 if __name__ == '__main__':
     initialize_database()
-
+    
     # Test insert
     test_data = {
         'spot_usd':     3350.0,
