@@ -166,6 +166,38 @@ def get_active_alerts():
     conn.close()
     return [dict(row) for row in rows]
 
+def get_alert_history():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM alerts 
+        WHERE status = 'triggered'
+        ORDER BY triggered_at DESC
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def get_all_alerts():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM alerts 
+        ORDER BY created_at DESC
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def cancel_alert(alert_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE alerts SET status = 'cancelled'
+        WHERE id = ?
+    ''', (alert_id,))
+    conn.commit()
+    conn.close()
 
 def add_alert(alert_type, target_price):
     conn = get_connection()

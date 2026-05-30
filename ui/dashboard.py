@@ -106,12 +106,13 @@ class Dashboard(ctk.CTk):
 
         self.tab_buttons = {}
         tabs = [
-            ('dashboard',  '📊  Dashboard'),
-            ('charts',     '📈  Charts'),
-            ('alerts',     '🔔  Alerts'),
-            ('portfolio',  '💰  Portfolio'),
-            ('history',    '🕐  History'),
-            ('settings',   '⚙️   Settings'),
+            ('dashboard',      '📊  Dashboard'),
+            ('charts',         '📈  Charts'),
+            ('alerts',         '🔔  Alerts'),
+            ('alert_history',  '📋  Alert History'),
+            ('portfolio',      '💰  Portfolio'),
+            ('history',        '🕐  History'),
+            ('settings',       '⚙️   Settings'),
         ]
 
         for key, label in tabs:
@@ -203,6 +204,7 @@ class Dashboard(ctk.CTk):
             'dashboard': self._build_dashboard_tab,
             'charts':    self._build_charts_tab,
             'alerts':    self._build_alerts_tab,
+            'alert_history': self._build_alert_history_tab,
             'portfolio': self._build_portfolio_tab,
             'history':   self._build_history_tab,
             'settings':  self._build_settings_tab,
@@ -780,6 +782,166 @@ class Dashboard(ctk.CTk):
         # Update summary
         self._update_portfolio_summary()
 
+    # =========================================================================
+    # TAB — ALERT HISTORY
+    # =========================================================================
+    def _build_alert_history_tab(self):
+        p = self.content_frame
+
+        ctk.CTkLabel(p, text='Alert History',
+            font=ctk.CTkFont(size=22, weight='bold'), text_color=TEXT
+        ).pack(anchor='w', padx=24, pady=(20, 4))
+
+        ctk.CTkLabel(p,
+            text='All active, triggered and cancelled alerts',
+            font=ctk.CTkFont(size=11), text_color=SUBTEXT
+        ).pack(anchor='w', padx=24, pady=(0, 16))
+
+        # ── Summary cards ──
+        summary_row = ctk.CTkFrame(p, fg_color='transparent')
+        summary_row.pack(fill='x', padx=24, pady=(0, 16))
+        for i in range(3):
+            summary_row.columnconfigure(i, weight=1)
+
+        from database.db_manager import get_all_alerts
+        all_alerts  = get_all_alerts()
+        active      = [a for a in all_alerts if a['status'] == 'active']
+        triggered   = [a for a in all_alerts if a['status'] == 'triggered']
+        cancelled   = [a for a in all_alerts if a['status'] == 'cancelled']
+
+        self._make_card(summary_row, 'ACTIVE',    str(len(active)),    'monitoring',      GREEN,   0)
+        self._make_card(summary_row, 'TRIGGERED', str(len(triggered)), 'alerts fired',    GOLD,    1)
+        self._make_card(summary_row, 'CANCELLED', str(len(cancelled)), 'dismissed',       SUBTEXT, 2)
+
+        # ── Filter toggle ──
+        filter_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=10)
+        filter_frame.pack(padx=24, pady=(0, 16), anchor='w')
+
+        self.alert_filter = ctk.StringVar(value='all')
+        for label, val in [('All', 'all'), ('Active', 'active'),
+                           ('Triggered', 'triggered'), ('Cancelled', 'cancelled')]:
+            ctk.CTkRadioButton(
+                filter_frame,
+                text=label,
+                variable=self.alert_filter,
+                value=val,
+                command=lambda: self._render_alert_history(),
+                text_color=TEXT,
+                fg_color=GOLD_DARK
+            ).pack(side='left', padx=16, pady=10)
+
+        # ── Table header ──
+        header = ctk.CTkFrame(p, fg_color=CARD2, corner_radius=8)
+        header.pack(fill='x', padx=24, pady=(0, 4))
+
+        cols   = ['Type', 'Target Price', 'Status', 'Created', 'Triggered At', '']
+        widths = [80,      120,            100,       160,       160,            60]
+
+        for col, w in zip(cols, widths):
+            ctk.CTkLabel(header, text=col,
+                font=ctk.CTkFont(size=11, weight='bold'),
+                text_color=SUBTEXT, width=w, anchor='w'
+            ).pack(side='left', padx=8, pady=8)
+
+        # ── Alert rows ──
+        self.alert_history_frame = ctk.CTkFrame(p, fg_color='transparent')
+        self.alert_history_frame.pack(fill='x', padx=24)
+        self._render_alert_history()
+
+
+    def _render_alert_history(self):
+        for w in self.alert_history_frame.winfo_children():
+            w.destroy()
+
+        from database.db_manager import get_all_alerts, cancel_alert
+
+        all_alerts  = get_all_alerts()
+        filter_val  = self.alert_filter.get() if hasattr(self, 'alert_filter') else 'all'
+
+        if filter_val != 'all':
+            all_alerts = [a for a in all_alerts if a['status'] == filter_val]
+
+        if not all_alerts:
+            ctk.CTkLabel(self.alert_history_frame,
+                text='No alerts found.',
+                font=ctk.CTkFont(size=12), text_color=SUBTEXT
+            ).pack(pady=16)
+            return
+
+        for alert in all_alerts:
+            status      = alert['status']
+            alert_type  = alert['type']
+            target      = alert['target_price']
+            created     = str(alert['created_at'])[:16]
+            triggered   = str(alert['triggered_at'])[:16] if alert['triggered_at'] else '---'
+
+            # Colors
+            type_color = GREEN if alert_type == 'buy' else RED
+            status_color = {
+                'active':    GREEN,
+                'triggered': GOLD,
+                'cancelled': SUBTEXT
+            }.get(status, TEXT)
+
+            row = ctk.CTkFrame(
+                self.alert_history_frame,
+                fg_color=CARD, corner_radius=8
+            )
+            row.pack(fill='x', pady=3)
+
+            # Type
+            ctk.CTkLabel(row,
+                text=f"{'🟢' if alert_type=='buy' else '🔴'} {alert_type.upper()}",
+                font=ctk.CTkFont(size=11, weight='bold'),
+                text_color=type_color, width=80, anchor='w'
+            ).pack(side='left', padx=8, pady=10)
+
+            # Target price
+            ctk.CTkLabel(row,
+                text=f"₹{target:,.0f}/gram",
+                font=ctk.CTkFont(size=11),
+                text_color=TEXT, width=120, anchor='w'
+            ).pack(side='left', padx=8)
+
+            # Status badge
+            ctk.CTkLabel(row,
+                text=status.upper(),
+                font=ctk.CTkFont(size=10, weight='bold'),
+                text_color=status_color, width=100, anchor='w'
+            ).pack(side='left', padx=8)
+
+            # Created
+            ctk.CTkLabel(row,
+                text=created,
+                font=ctk.CTkFont(size=10),
+                text_color=SUBTEXT, width=160, anchor='w'
+            ).pack(side='left', padx=8)
+
+            # Triggered at
+            ctk.CTkLabel(row,
+                text=triggered,
+                font=ctk.CTkFont(size=10),
+                text_color=GOLD if triggered != '---' else SUBTEXT,
+                width=160, anchor='w'
+            ).pack(side='left', padx=8)
+
+            # Cancel button (only for active alerts)
+            if status == 'active':
+                aid = alert['id']
+                ctk.CTkButton(row,
+                    text='Cancel',
+                    width=60, height=28,
+                    fg_color='#333333',
+                    hover_color='#cc0000',
+                    text_color=SUBTEXT,
+                    font=ctk.CTkFont(size=10),
+                    command=lambda i=aid: self._cancel_alert(i)
+                ).pack(side='left', padx=6)
+
+    def _cancel_alert(self, alert_id):
+        from database.db_manager import cancel_alert
+        cancel_alert(alert_id)
+        self._render_alert_history()
 
     def _add_purchase(self):
         try:
