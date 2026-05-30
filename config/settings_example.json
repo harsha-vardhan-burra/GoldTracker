@@ -1,0 +1,10 @@
+{
+    "goldapi_key": "YOUR_GOLDAPI_KEY_HERE",
+    "city": "hyderabad",
+    "karat": "24",
+    "polling_interval_minutes": 5,
+    "startup_enabled": true,
+    "theme": "dark",
+    "target_buy_price": null,
+    "target_sell_price": null
+}

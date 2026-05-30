@@ -1,0 +1,17 @@
+# API keys and user config
+config/settings.json
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Database (user data)
+*.db
+
+# PyInstaller output
+dist/
+build/
+*.spec
