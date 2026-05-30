@@ -73,6 +73,8 @@ def initialize_database():
         ('target_sell_price',       'null'),
         ('sound_enabled',           'on'),
         ('spike_alerts_enabled',    'on'),
+        ('weekly_summary_enabled',  'on'),
+        ('weekly_summary_last_sent', ''),
     ]
     cursor.executemany('''
         INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)

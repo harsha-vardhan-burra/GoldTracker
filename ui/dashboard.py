@@ -1215,6 +1215,20 @@ class Dashboard(ctk.CTk):
             command=self._toggle_spike
         ).pack(side='right', padx=16)
 
+        summary_row = self._settings_row(p, 'Weekly Summary', 'Sunday morning gold performance digest')
+        self.summary_var = ctk.StringVar(
+            value=get_setting('weekly_summary_enabled') or 'on'
+        )
+        ctk.CTkSwitch(
+            summary_row,
+            text='',
+            variable=self.summary_var,
+            onvalue='on',
+            offvalue='off',
+            progress_color=GOLD_DARK,
+            command=self._toggle_summary
+        ).pack(side='right', padx=16)
+
         # ── Save button ──
         ctk.CTkButton(
             p,
@@ -1327,6 +1341,8 @@ class Dashboard(ctk.CTk):
     def _toggle_spike(self):
         update_setting('spike_alerts_enabled', self.spike_var.get())
 
+    def _toggle_summary(self):
+        update_setting('weekly_summary_enabled', self.summary_var.get())
 # ─── Run ─────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     app = Dashboard()

@@ -3,7 +3,7 @@ import os
 import time
 import threading
 from core.alert_engine import check_alerts, check_price_spike
-
+from core.weekly_summary import send_weekly_summary_if_due
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.data_engine  import fetch_all
@@ -50,6 +50,9 @@ def run_cycle():
         if len(history) >= 2:
             prev_price = history[-2]['price_24k']
             check_price_spike(data['price_24k'], prev_price)
+
+        # Step 7: Weekly summary (Sundays only)
+        send_weekly_summary_if_due()
 
         # Return full result including labels for UI to use
         data['buy_label']  = analytics['buy_label']
