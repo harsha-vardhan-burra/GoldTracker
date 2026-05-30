@@ -1184,6 +1184,37 @@ class Dashboard(ctk.CTk):
         )
         theme_menu.pack(side='right')
 
+        # ── Sound ──
+        self._settings_section(p, 'NOTIFICATIONS')
+
+        sound_row = self._settings_row(p, 'Alert Sound', 'Play sound when a price alert is triggered')
+        self.sound_var = ctk.StringVar(
+            value=get_setting('sound_enabled') or 'on'
+        )
+        ctk.CTkSwitch(
+            sound_row,
+            text='',
+            variable=self.sound_var,
+            onvalue='on',
+            offvalue='off',
+            progress_color=GOLD_DARK,
+            command=self._toggle_sound
+        ).pack(side='right', padx=16)
+
+        spike_row = self._settings_row(p, 'Spike Alerts', 'Notify when price moves more than 2% suddenly')
+        self.spike_var = ctk.StringVar(
+            value=get_setting('spike_alerts_enabled') or 'on'
+        )
+        ctk.CTkSwitch(
+            spike_row,
+            text='',
+            variable=self.spike_var,
+            onvalue='on',
+            offvalue='off',
+            progress_color=GOLD_DARK,
+            command=self._toggle_spike
+        ).pack(side='right', padx=16)
+
         # ── Save button ──
         ctk.CTkButton(
             p,
@@ -1290,6 +1321,11 @@ class Dashboard(ctk.CTk):
             self.scheduler.stop()
         self.destroy()
 
+    def _toggle_sound(self):
+        update_setting('sound_enabled', self.sound_var.get())
+
+    def _toggle_spike(self):
+        update_setting('spike_alerts_enabled', self.spike_var.get())
 
 # ─── Run ─────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':

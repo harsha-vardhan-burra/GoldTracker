@@ -19,8 +19,13 @@ ICON_PATH   = os.path.join(
 # ─── SOUND ALERT ─────────────────────────────────────────────────────────────
 def play_alert_sound():
     try:
+        # Check if sound is enabled in settings
+        from database.db_manager import get_setting
+        if get_setting('sound_enabled') == 'off':
+            print('[AlertEngine] Sound disabled — skipping')
+            return
+
         import winsound
-        # Beep pattern: frequency, duration(ms)
         winsound.Beep(1000, 200)
         winsound.Beep(1200, 200)
         winsound.Beep(1000, 300)
@@ -112,11 +117,11 @@ def _fire_alert_async(title, message):
 
 # ─── PRICE CHANGE ALERT (automatic, no user setup needed) ────────────────────
 def check_price_spike(current_price, previous_price, threshold_pct=2.0):
-    """
-    Automatically fires a notification if price moves more than
-    threshold_pct in either direction since last reading.
-    Default threshold: 2%
-    """
+    # Check if spike alerts are enabled
+    from database.db_manager import get_setting
+    if get_setting('spike_alerts_enabled') == 'off':
+        return
+
     if not current_price or not previous_price:
         return
 

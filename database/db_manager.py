@@ -71,6 +71,8 @@ def initialize_database():
         ('theme',                   'dark'),
         ('target_buy_price',        'null'),
         ('target_sell_price',       'null'),
+        ('sound_enabled',           'on'),
+        ('spike_alerts_enabled',    'on'),
     ]
     cursor.executemany('''
         INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
