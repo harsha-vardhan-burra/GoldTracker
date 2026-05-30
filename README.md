@@ -92,6 +92,8 @@ python main.py --startup
 ---
 
 ## Project Structure
+
+```
 GoldTracker/
 ├── core/
 │   ├── data_engine.py      # Fetches from 3 live sources
@@ -111,7 +113,7 @@ GoldTracker/
 ├── assets/
 │   └── icon.ico
 └── main.py                 # Entry point
----
+```
 
 ## How the Buy/Sell Signal Works
 
