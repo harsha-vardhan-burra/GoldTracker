@@ -2,9 +2,10 @@ import sys
 import os
 import time
 import threading
-from alert_engine import check_alerts, check_price_spike
-from weekly_summary import send_weekly_summary_if_due
-from news_engine import get_news_context
+
+from core.alert_engine import check_alerts, check_price_spike
+from core.weekly_summary import send_weekly_summary_if_due
+from core.news_engine import get_news_context
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.data_engine  import fetch_all
