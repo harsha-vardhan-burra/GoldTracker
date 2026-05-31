@@ -2,15 +2,25 @@ import sys
 import os
 import time
 import threading
-
-from core.alert_engine import check_alerts, check_price_spike
-from core.weekly_summary import send_weekly_summary_if_due
-from core.news_engine import get_news_context
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.data_engine  import fetch_all
-from core.analytics    import run_analytics
-from database.db_manager import insert_price, get_setting
+try:
+    # When imported from main.py (root context)
+    from core.alert_engine  import check_alerts, check_price_spike
+    from core.weekly_summary import send_weekly_summary_if_due
+    from core.news_engine   import get_news_context
+    from core.data_engine   import fetch_all
+    from core.analytics     import run_analytics
+    from database.db_manager import insert_price, get_setting, get_price_history
+except ImportError:
+    # When run directly (core context)
+    from alert_engine  import check_alerts, check_price_spike
+    from weekly_summary import send_weekly_summary_if_due
+    from news_engine   import get_news_context
+    from data_engine   import fetch_all
+    from analytics     import run_analytics
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from database.db_manager import insert_price, get_setting, get_price_history
 
 
 # ─── SINGLE FETCH + STORE CYCLE ──────────────────────────────────────────────

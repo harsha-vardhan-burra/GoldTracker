@@ -38,7 +38,10 @@ def initialize_database():
             -- Scores and explanation
             buy_score       INTEGER,
             sell_score      INTEGER,
-            explanation     TEXT
+            explanation     TEXT,
+
+            -- Data source tracking
+            data_source     TEXT DEFAULT 'unknown'
         )
     ''')
 
@@ -98,6 +101,29 @@ def initialize_database():
     conn.close()
     print('Database initialized successfully at:', DB_PATH)
 
+def migrate_add_source_column():
+    """
+    Adds data_source column to price_history if it doesn't exist.
+    Safe to run multiple times — checks before adding.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+
+    # Check if column already exists
+    cursor.execute("PRAGMA table_info(price_history)")
+    columns = [row['name'] for row in cursor.fetchall()]
+
+    if 'data_source' not in columns:
+        cursor.execute('''
+            ALTER TABLE price_history 
+            ADD COLUMN data_source TEXT DEFAULT 'unknown'
+        ''')
+        conn.commit()
+        print('[Migration] Added data_source column to price_history')
+    else:
+        print('[Migration] data_source column already exists — skipping')
+
+    conn.close()
 
 def insert_price(data: dict):
     conn = get_connection()
@@ -106,11 +132,13 @@ def insert_price(data: dict):
         INSERT INTO price_history (
             spot_usd, usd_inr, price_24k, price_22k, retail_price,
             ma7, ma30, momentum, volatility,
-            buy_score, sell_score, explanation
+            buy_score, sell_score, explanation,
+            data_source
         ) VALUES (
             :spot_usd, :usd_inr, :price_24k, :price_22k, :retail_price,
             :ma7, :ma30, :momentum, :volatility,
-            :buy_score, :sell_score, :explanation
+            :buy_score, :sell_score, :explanation,
+            :data_source
         )
     ''', data)
     conn.commit()

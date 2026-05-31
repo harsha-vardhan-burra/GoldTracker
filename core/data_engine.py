@@ -45,7 +45,7 @@ def fetch_spot_price_usd():
             price_oz   = data.get('price', 0)
             price_gram = round(price_oz / 31.1035, 4)
             print(f'[GoldAPI] Spot: ${price_oz}/oz → ${price_gram}/gram')
-            return price_oz, price_gram
+            return price_oz, price_gram, 'goldapi.io'
         else:
             print(f'[GoldAPI] Failed: {r.status_code} — trying fallback')
 
@@ -61,14 +61,14 @@ def fetch_spot_price_usd():
             price_oz   = data.get('price', 0)
             price_gram = round(price_oz / 31.1035, 4)
             print(f'[GoldAPI Fallback] Spot: ${price_oz}/oz → ${price_gram}/gram')
-            return price_oz, price_gram
+            return price_oz, price_gram, 'gold-api.com'
         else:
             print(f'[GoldAPI Fallback] Failed: {r.status_code}')
 
     except Exception as e:
         print(f'[GoldAPI Fallback] Error: {e}')
 
-    return None, None
+    return None, None, 'unavailable'
 
 
 # ─── FETCH 2: USD to INR exchange rate ───────────────────────────────────────
@@ -171,7 +171,7 @@ def fetch_all():
     print('Fetching gold data...')
     print('─'*50)
 
-    spot_usd_oz, spot_usd_gram = fetch_spot_price_usd()
+    spot_usd_oz, spot_usd_gram, spot_source = fetch_spot_price_usd()
     usd_inr                    = fetch_usd_inr()
     retail_price               = fetch_retail_price()
     price_24k, price_22k       = calculate_inr_prices(spot_usd_gram, usd_inr)
@@ -197,6 +197,7 @@ def fetch_all():
         'buy_score':    None,
         'sell_score':   None,
         'explanation':  None,
+        'data_source':  spot_source
     }
 
     print('─'*50)
