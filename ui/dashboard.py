@@ -611,7 +611,15 @@ class Dashboard(ctk.CTk):
             )
             canvas.pack(fill='x', padx=16, pady=16)
 
-            prices = [r['price_24k'] for r in history if r['price_24k']]
+            # Separate real prices from gap markers
+            chart_data = []
+            for r in history:
+                if r.get('data_source') == 'gap_marker':
+                    chart_data.append(None)  # None = gap
+                elif r.get('price_24k'):
+                    chart_data.append(r['price_24k'])
+
+            prices = [p for p in chart_data if p is not None]
             if not prices:
                 return
 
@@ -642,8 +650,32 @@ class Dashboard(ctk.CTk):
             for i, price in enumerate(prices):
                 points.extend([x_pos(i), y_pos(price)])
 
-            if len(points) >= 4:
-                canvas.create_line(points, fill=GOLD, width=2, smooth=True)
+            # Draw line segments, skipping gaps
+            segment_points = []
+            for i, price in enumerate(chart_data):
+                if price is None:
+                    # Gap — draw current segment and start new one
+                    if len(segment_points) >= 4:
+                        canvas.create_line(
+                            segment_points, fill=GOLD,
+                            width=2, smooth=True
+                        )
+                    segment_points = []
+                    # Draw vertical gap indicator
+                    x = x_pos(i)
+                    canvas.create_line(
+                        x, pad_t, x, H - pad_b,
+                        fill='#444444', dash=(3, 3), width=1
+                    )
+                else:
+                    segment_points.extend([x_pos(i), y_pos(price)])
+
+            # Draw final segment
+            if len(segment_points) >= 4:
+                canvas.create_line(
+                    segment_points, fill=GOLD,
+                    width=2, smooth=True
+                )
 
             # Dots at first and last
             x0, y0 = x_pos(0), y_pos(prices[0])
@@ -1251,8 +1283,16 @@ class Dashboard(ctk.CTk):
 
         # Rows (most recent first)
         for row_data in reversed(history[-50:]):
-            row = ctk.CTkFrame(p, fg_color=CARD, corner_radius=8)
-            row.pack(fill='x', padx=24, pady=2)
+            # Show gap markers differently
+            if row_data.get('data_source') == 'gap_marker':
+                gap_row = ctk.CTkFrame(p, fg_color='#1a1a1a', corner_radius=8)
+                gap_row.pack(fill='x', padx=24, pady=2)
+                ctk.CTkLabel(gap_row,
+                    text=f"  ⚠️  {row_data.get('explanation', 'App was offline')}",
+                    font=ctk.CTkFont(size=10),
+                    text_color='#555555'
+                ).pack(side='left', padx=8, pady=6)
+                continue
 
             ts    = str(row_data.get('timestamp', ''))[:16]
             p24   = format_inr(row_data.get('price_24k'))

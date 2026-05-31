@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import datetime
 
 # Always store the database inside the project folder
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -183,6 +184,57 @@ def get_price_history(days=30):
     conn.close()
     return [dict(row) for row in rows]
 
+def insert_gap_marker(gap_minutes):
+    """
+    Inserts a special row marking that the app was offline.
+    Charts use this to draw breaks instead of false lines.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO price_history (
+            spot_usd, usd_inr, price_24k, price_22k, retail_price,
+            ma7, ma30, momentum, volatility,
+            buy_score, sell_score, explanation,
+            data_source
+        ) VALUES (
+            NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL,
+            NULL, NULL, ?,
+            'gap_marker'
+        )
+    ''', (f'App offline for {gap_minutes} minutes',))
+    conn.commit()
+    conn.close()
+    print(f'[GapHandler] Marked gap: app was offline for {gap_minutes} minutes')
+
+
+def get_last_reading_age_minutes():
+    """
+    Returns how many minutes ago the last real price was stored.
+    Returns None if no readings exist.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT timestamp FROM price_history
+        WHERE data_source != 'gap_marker'
+        ORDER BY timestamp DESC
+        LIMIT 1
+    ''')
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    try:
+        import datetime as dt
+        last_time = dt.datetime.fromisoformat(str(row['timestamp']))
+        diff      = dt.datetime.now() - last_time
+        return diff.total_seconds() / 60
+    except Exception:
+        return None
 
 def get_setting(key):
     conn = get_connection()

@@ -13,6 +13,10 @@ try:
     from core.analytics     import run_analytics
     from database.db_manager import insert_price, get_setting, get_price_history
     from core.anomaly_detector import validate_price, get_data_quality
+    from database.db_manager import (
+        insert_price, get_setting, get_price_history,
+        insert_gap_marker, get_last_reading_age_minutes
+    )
 except ImportError:
     # When run directly (core context)
     from alert_engine  import check_alerts, check_price_spike
@@ -23,7 +27,10 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     from database.db_manager import insert_price, get_setting, get_price_history
     from anomaly_detector import validate_price, get_data_quality
-
+    from database.db_manager import (
+        insert_price, get_setting, get_price_history,
+        insert_gap_marker, get_last_reading_age_minutes
+    )
 # ─── SINGLE FETCH + STORE CYCLE ──────────────────────────────────────────────
 def run_cycle():
     print('\n[Scheduler] Running fetch cycle...')
@@ -132,10 +139,30 @@ class GoldScheduler:
                     break
                 time.sleep(1)
 
+    def check_and_mark_gap(self):
+        """
+        Called on startup. Checks if app was offline
+        and inserts a gap marker if needed.
+        """
+        age_minutes = get_last_reading_age_minutes()
+
+        if age_minutes is None:
+            print('[GapHandler] No previous readings — fresh start')
+            return
+
+        # If last reading was more than 15 mins ago → mark gap
+        GAP_THRESHOLD = 15
+        if age_minutes > GAP_THRESHOLD:
+            insert_gap_marker(int(age_minutes))
+            print(f'[GapHandler] App was offline for {int(age_minutes)} minutes')
+        else:
+            print(f'[GapHandler] Last reading {int(age_minutes)} mins ago — no gap')
+
     def start(self):
         if self.running:
             print('[Scheduler] Already running')
             return
+        self.check_and_mark_gap()
         self.running = True
         self.thread  = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
