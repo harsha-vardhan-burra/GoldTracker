@@ -312,9 +312,13 @@ class Dashboard(ctk.CTk):
         for i in range(3):
             insights.columnconfigure(i, weight=1)
 
-        self.ins_spot   = self._make_insight(insights, 'SPOT (USD/oz)', '---', 0)
-        self.ins_usd_inr= self._make_insight(insights, 'USD / INR',     '---', 1)
-        self.ins_status = self._make_insight(insights, 'POLL STATUS',   'Active', 2)
+       
+        insights.columnconfigure(3, weight=1)
+
+        self.ins_spot    = self._make_insight(insights, 'SPOT (USD/oz)',   '---',    0)
+        self.ins_usd_inr = self._make_insight(insights, 'USD / INR',       '---',    1)
+        self.ins_status  = self._make_insight(insights, 'POLL STATUS',     'Active', 2)
+        self.ins_quality = self._make_insight(insights, 'DATA QUALITY',    '---',    3)
 
         # ── News Headlines ──
         news_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=12)
@@ -481,6 +485,33 @@ class Dashboard(ctk.CTk):
             self.ins_spot.configure(text=f"${spot:,.2f}")
         if hasattr(self, 'ins_usd_inr') and usd_inr:
             self.ins_usd_inr.configure(text=f"₹{usd_inr:.2f}")
+
+        # Poll status with source
+        source = data.get('data_source', 'unknown')
+        source_display = {
+            'goldapi.io':   'GoldAPI ✓',
+            'gold-api.com': 'Fallback ✓',
+            'unavailable':  'No Source ✗',
+            'unknown':      'Active'
+        }.get(source, 'Active')
+        if hasattr(self, 'ins_status'):
+            self.ins_status.configure(text=source_display)
+
+        # Data quality
+        quality = data.get('data_quality')
+        quality_score = data.get('data_quality_score')
+        if hasattr(self, 'ins_quality') and quality:
+            quality_colors = {
+                'HIGH':   '#00C853',
+                'MEDIUM': '#FF6D00',
+                'LOW':    '#D50000',
+                'POOR':   '#D50000'
+            }
+            color = quality_colors.get(quality, SUBTEXT)
+            self.ins_quality.configure(
+                text=f"{quality} ({quality_score}/100)",
+                text_color=color
+            )
 
         now = datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')
         if hasattr(self, 'dash_updated'):
