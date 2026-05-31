@@ -12,6 +12,7 @@ try:
     from core.data_engine   import fetch_all
     from core.analytics     import run_analytics
     from database.db_manager import insert_price, get_setting, get_price_history
+    from core.anomaly_detector import validate_price, get_data_quality
 except ImportError:
     # When run directly (core context)
     from alert_engine  import check_alerts, check_price_spike
@@ -21,7 +22,7 @@ except ImportError:
     from analytics     import run_analytics
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     from database.db_manager import insert_price, get_setting, get_price_history
-
+    from anomaly_detector import validate_price, get_data_quality
 
 # ─── SINGLE FETCH + STORE CYCLE ──────────────────────────────────────────────
 def run_cycle():
@@ -34,6 +35,21 @@ def run_cycle():
         if not data or not data.get('price_24k'):
             print('[Scheduler] Fetch returned no usable data — skipping this cycle')
             return None
+
+        # Step 2: Validate price before storing
+        is_valid, reason = validate_price(
+            data['price_24k'],
+            data.get('data_source', 'unknown')
+        )
+        if not is_valid:
+            print(f'[Scheduler] Anomaly detected — skipping storage: {reason}')
+            return None
+
+        # Step 2b: Get data quality score
+        quality_label, quality_score, quality_details, sources_live = get_data_quality(data)
+        data['data_quality']       = quality_label
+        data['data_quality_score'] = quality_score
+        print(f'[Scheduler] Data quality: {quality_label} ({quality_score}/100) — {sources_live}/3 sources live')
 
         # Step 2: Run analytics on current price
         analytics = run_analytics(data['price_24k'])

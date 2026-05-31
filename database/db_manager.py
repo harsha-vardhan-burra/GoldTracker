@@ -97,6 +97,18 @@ def initialize_database():
             created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Anomaly log table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS anomaly_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       DATETIME DEFAULT CURRENT_TIMESTAMP,
+            price_received  REAL,
+            previous_price  REAL,
+            change_pct      REAL,
+            reason          TEXT,
+            data_source     TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
     print('Database initialized successfully at:', DB_PATH)
