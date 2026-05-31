@@ -8,40 +8,112 @@ import datetime
 from database.db_manager import get_setting, update_setting
 
 
-# ─── KEYWORDS THAT AFFECT GOLD PRICE ─────────────────────────────────────────
+# ─── QUERY ROTATION POOL ─────────────────────────────────────────────────────
+QUERY_POOL = [
+    'gold price market',
+    'india gold rupee MCX',
+    'gold fed rates inflation',
+    'gold central bank buying',
+]
+
+
+# ─── BULLISH / BEARISH KEYWORDS ──────────────────────────────────────────────
 BULLISH_KEYWORDS = [
     'inflation', 'recession', 'fed rate cut', 'interest rate cut',
     'dollar weakens', 'usd falls', 'safe haven', 'geopolitical',
     'war', 'conflict', 'crisis', 'uncertainty', 'gold demand',
-    'central bank buying', 'gold rally', 'gold rises', 'gold surges'
+    'central bank buying', 'gold rally', 'gold rises', 'gold surges',
+    'weak dollar', 'dollar weakness', 'rate cut', 'dovish',
+    'gold hits', 'gold record', 'gold high'
 ]
 
 BEARISH_KEYWORDS = [
     'rate hike', 'interest rate hike', 'dollar strengthens',
     'usd rises', 'risk on', 'gold falls', 'gold drops',
-    'gold slips', 'profit taking', 'gold selloff'
+    'gold slips', 'profit taking', 'gold selloff', 'strong dollar',
+    'dollar strength', 'hawkish', 'gold low', 'gold tumbles'
 ]
 
 
+# ─── TIME-AWARE INTERVAL ─────────────────────────────────────────────────────
+def get_fetch_interval_minutes():
+    """
+    Returns fetch interval based on market hours.
+    MCX trades 9:00am - 11:30pm IST
+    US market opens 7:30pm - 2:00am IST
+    During active hours → 30 mins
+    Off hours → 120 mins
+    """
+    now_ist = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(hours=5, minutes=30)
+    hour    = now_ist.hour
+    minute  = now_ist.minute
+
+    # MCX hours: 9:00 to 23:30 IST
+    mcx_open  = (hour > 9) or (hour == 9 and minute >= 0)
+    mcx_close = (hour < 23) or (hour == 23 and minute <= 30)
+    in_mcx    = mcx_open and mcx_close
+
+    # US market open: 19:30 to 02:00 IST
+    in_us = hour >= 19 or hour < 2
+
+    if in_mcx or in_us:
+        return 30    # active market hours
+    else:
+        return 120   # off hours
+
+
+def should_fetch_news():
+    """Check if enough time has passed since last fetch."""
+    last_fetch = get_setting('news_last_fetched')
+    if not last_fetch:
+        return True
+
+    try:
+        last_time    = datetime.datetime.fromisoformat(last_fetch)
+        diff_minutes = (datetime.datetime.now() - last_time).total_seconds() / 60
+        interval     = get_fetch_interval_minutes()
+        return diff_minutes >= interval
+    except Exception:
+        return True
+
+
+def mark_news_fetched():
+    update_setting('news_last_fetched', datetime.datetime.now().isoformat())
+
+
+# ─── QUERY ROTATION ───────────────────────────────────────────────────────────
+def get_next_query():
+    """Returns the next query in rotation and advances the counter."""
+    try:
+        current_idx = int(get_setting('news_query_index') or 0)
+    except Exception:
+        current_idx = 0
+
+    query     = QUERY_POOL[current_idx % len(QUERY_POOL)]
+    next_idx  = (current_idx + 1) % len(QUERY_POOL)
+    update_setting('news_query_index', str(next_idx))
+
+    print(f'[NewsEngine] Query rotation: [{current_idx}] "{query}"')
+    return query
+
+
 # ─── FETCH NEWS ───────────────────────────────────────────────────────────────
-def fetch_gold_news():
-    """
-    Fetches latest gold-related headlines from GNews API.
-    Returns list of article dicts.
-    """
+def fetch_gold_news(query=None):
     try:
         api_key = _load_news_api_key()
         if not api_key:
             print('[NewsEngine] No API key found')
             return []
 
-        url = 'https://gnews.io/api/v4/search'
+        if not query:
+            query = get_next_query()
+
+        url    = 'https://gnews.io/api/v4/search'
         params = {
-            'q':        'gold price market',
-            'lang':     'en',
-            'country':  'in',
-            'max':      5,
-            'apikey':   api_key
+            'q':      query,
+            'lang':   'en',
+            'max':    5,
+            'apikey': api_key
         }
 
         r = requests.get(url, params=params, timeout=10)
@@ -49,7 +121,7 @@ def fetch_gold_news():
         if r.status_code == 200:
             data     = r.json()
             articles = data.get('articles', [])
-            print(f'[NewsEngine] Fetched {len(articles)} articles')
+            print(f'[NewsEngine] Fetched {len(articles)} articles for "{query}"')
             return articles
         else:
             print(f'[NewsEngine] Failed: {r.status_code}')
@@ -62,7 +134,7 @@ def fetch_gold_news():
 
 def _load_news_api_key():
     try:
-        base_dir     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_dir      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         settings_path = os.path.join(base_dir, 'config', 'settings.json')
         with open(settings_path, 'r') as f:
             data = json.load(f)
@@ -71,14 +143,46 @@ def _load_news_api_key():
         return ''
 
 
-# ─── ANALYSE SENTIMENT ────────────────────────────────────────────────────────
-def analyse_sentiment(articles):
+# ─── DEDUPLICATION ───────────────────────────────────────────────────────────
+def deduplicate_articles(articles):
+    """Remove duplicates by URL and title."""
+    seen_urls   = set()
+    seen_titles = set()
+    unique      = []
+
+    for article in articles:
+        url   = article.get('url', '')
+        title = article.get('title', '').lower().strip()
+
+        if url in seen_urls or title in seen_titles:
+            continue
+
+        seen_urls.add(url)
+        seen_titles.add(title)
+        unique.append(article)
+
+    return unique
+
+
+# ─── SENTIMENT CLASSIFICATION ────────────────────────────────────────────────
+def classify_sentiment(articles):
     """
-    Scans headlines for bullish/bearish gold keywords.
-    Returns sentiment score and reasoning.
+    Classifies market sentiment from headlines.
+    Returns structured dict:
+    {
+        signal:     Bullish / Bearish / Neutral
+        confidence: High / Medium / Low
+        reason:     short explanation string
+        score:      raw numeric score
+    }
     """
     if not articles:
-        return 0, []
+        return {
+            'signal':     'Neutral',
+            'confidence': 'Low',
+            'reason':     'No news data',
+            'score':      0
+        }
 
     bullish_hits = []
     bearish_hits = []
@@ -89,133 +193,129 @@ def analyse_sentiment(articles):
         text        = f"{title} {description}"
 
         for kw in BULLISH_KEYWORDS:
-            if kw in text:
+            if kw in text and kw not in bullish_hits:
                 bullish_hits.append(kw)
 
         for kw in BEARISH_KEYWORDS:
-            if kw in text:
+            if kw in text and kw not in bearish_hits:
                 bearish_hits.append(kw)
 
-    # Score: positive = bullish, negative = bearish
     score = len(bullish_hits) - len(bearish_hits)
 
-    return score, bullish_hits, bearish_hits
+    # Signal
+    if score > 0:
+        signal = 'Bullish'
+    elif score < 0:
+        signal = 'Bearish'
+    else:
+        signal = 'Neutral'
+
+    # Confidence
+    total_hits = len(bullish_hits) + len(bearish_hits)
+    if total_hits >= 4:
+        confidence = 'High'
+    elif total_hits >= 2:
+        confidence = 'Medium'
+    else:
+        confidence = 'Low'
+
+    # Reason — pick most impactful keyword
+    if signal == 'Bullish' and bullish_hits:
+        reason = bullish_hits[0].title()
+    elif signal == 'Bearish' and bearish_hits:
+        reason = bearish_hits[0].title()
+    else:
+        reason = 'Mixed signals'
+
+    return {
+        'signal':     signal,
+        'confidence': confidence,
+        'reason':     reason,
+        'score':      score
+    }
 
 
-# ─── BUILD REASONING STRING ───────────────────────────────────────────────────
-def build_news_reasoning(articles):
-    """
-    Returns a human-readable string explaining
-    what's driving gold prices based on news.
-    """
+# ─── BUILD REASONING STRING ──────────────────────────────────────────────────
+def build_news_reasoning(articles, sentiment):
     if not articles:
         return None
 
-    score, bullish, bearish = analyse_sentiment(articles)
-
-    # Deduplicate
-    bullish = list(set(bullish))[:3]
-    bearish = list(set(bearish))[:3]
-
-    if score > 0 and bullish:
-        factors = ', '.join(bullish[:2])
-        return f"Gold supported by {factors}"
-    elif score < 0 and bearish:
-        factors = ', '.join(bearish[:2])
-        return f"Gold under pressure from {factors}"
+    if sentiment['signal'] == 'Bullish':
+        return f"Gold supported by {sentiment['reason'].lower()}"
+    elif sentiment['signal'] == 'Bearish':
+        return f"Gold under pressure from {sentiment['reason'].lower()}"
     else:
-        # Just return latest headline summary
         if articles:
-            return f"Latest: {articles[0]['title'][:80]}"
+            return f"Mixed signals — {articles[0]['title'][:60]}"
         return None
 
 
-# ─── GET LATEST HEADLINES ─────────────────────────────────────────────────────
+# ─── GET HEADLINES ────────────────────────────────────────────────────────────
 def get_latest_headlines(articles, max_count=3):
-    """Returns simplified list of headlines for UI display."""
+    unique = deduplicate_articles(articles)
     headlines = []
-    seen_titles = set()
 
-    for article in articles:
-        title = article.get('title', '')
-        if title in seen_titles:
-            continue
-        seen_titles.add(title)
-
+    for article in unique[:max_count]:
         headlines.append({
-            'title':     title,
+            'title':     article.get('title', ''),
             'source':    article.get('source', {}).get('name', ''),
             'published': article.get('publishedAt', '')[:10],
             'url':       article.get('url', '')
         })
 
-        if len(headlines) >= max_count:
-            break
-
     return headlines
 
 
-# ─── HOURLY FETCH GATE ────────────────────────────────────────────────────────
-def should_fetch_news():
-    """Only fetch news once per hour to stay within free tier limits."""
-    last_fetch = get_setting('news_last_fetched')
-    if not last_fetch:
-        return True
-
-    try:
-        last_time = datetime.datetime.fromisoformat(last_fetch)
-        diff      = datetime.datetime.now() - last_time
-        return diff.total_seconds() >= 3600   # 1 hour
-    except Exception:
-        return True
-
-
-def mark_news_fetched():
-    update_setting('news_last_fetched', datetime.datetime.now().isoformat())
-
-
-# ─── MAIN: FETCH AND ANALYSE ──────────────────────────────────────────────────
+# ─── MAIN FUNCTION ────────────────────────────────────────────────────────────
 def get_news_context(force=False):
-    """
-    Main function called by scheduler.
-    Returns dict with reasoning and headlines.
-    Only fetches if 1 hour has passed since last fetch.
-    """
     if not force and not should_fetch_news():
-        print('[NewsEngine] Skipping — fetched less than 1 hour ago')
+        interval = get_fetch_interval_minutes()
+        print(f'[NewsEngine] Skipping — interval is {interval} mins (market hours aware)')
         return None
 
     if get_setting('news_enabled') == 'off':
         return None
 
-    articles = fetch_gold_news()
+    articles  = fetch_gold_news()
 
     if not articles:
         return None
 
     mark_news_fetched()
 
-    reasoning  = build_news_reasoning(articles)
+    articles   = deduplicate_articles(articles)
+    sentiment  = classify_sentiment(articles)
+    reasoning  = build_news_reasoning(articles, sentiment)
     headlines  = get_latest_headlines(articles)
 
     return {
         'reasoning':  reasoning,
         'headlines':  headlines,
-        'sentiment':  analyse_sentiment(articles)[0]
+        'sentiment':  sentiment,
     }
 
 
 # ─── Quick test ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     print('Testing news engine...\n')
+
+    now_ist = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(hours=5, minutes=30)
+    interval = get_fetch_interval_minutes()
+    print(f'Current IST: {now_ist.strftime("%H:%M")}')
+    print(f'Fetch interval: {interval} minutes')
+    print(f'Next query: {QUERY_POOL[int(get_setting("news_query_index") or 0) % len(QUERY_POOL)]}')
+
+    print('\nFetching...')
     result = get_news_context(force=True)
 
     if result:
+        s = result['sentiment']
+        print(f"\nSentiment : {s['signal']} ({s['confidence']} confidence)")
+        print(f"Reason    : {s['reason']}")
+        print(f"Score     : {s['score']}")
         print(f"Reasoning : {result['reasoning']}")
-        print(f"Sentiment : {result['sentiment']}")
         print(f"\nHeadlines:")
         for h in result['headlines']:
             print(f"  [{h['source']}] {h['title']}")
-            print(f"  Published: {h['published']}")
     else:
-        print('No news returned — check API key in settings.json')
+        print('No news returned')

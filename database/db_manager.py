@@ -80,6 +80,7 @@ def initialize_database():
         ('weekly_summary_last_sent', ''),
         ('news_enabled',      'on'),
         ('news_last_fetched', ''),
+        ('news_query_index', '0'),
     ]
     cursor.executemany('''
         INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)

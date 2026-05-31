@@ -359,7 +359,36 @@ class Dashboard(ctk.CTk):
                     ).pack(anchor='w')
                     return
 
-                # Reasoning line
+                # Sentiment tag
+                sentiment = result.get('sentiment', {})
+                if sentiment:
+                    sig    = sentiment.get('signal', 'Neutral')
+                    conf   = sentiment.get('confidence', 'Low')
+                    reason = sentiment.get('reason', '')
+                    sig_color = {
+                        'Bullish': GREEN,
+                        'Bearish': RED,
+                        'Neutral': ORANGE
+                    }.get(sig, SUBTEXT)
+
+                    tag_row = ctk.CTkFrame(
+                        self.news_container,
+                        fg_color=CARD2, corner_radius=8
+                    )
+                    tag_row.pack(fill='x', pady=(0, 8))
+
+                    ctk.CTkLabel(tag_row,
+                        text=f"  {sig.upper()}",
+                        font=ctk.CTkFont(size=12, weight='bold'),
+                        text_color=sig_color
+                    ).pack(side='left', padx=8, pady=8)
+
+                    ctk.CTkLabel(tag_row,
+                        text=f"{conf} confidence · {reason}",
+                        font=ctk.CTkFont(size=11),
+                        text_color=SUBTEXT
+                    ).pack(side='left', padx=4)
+
                 if result.get('reasoning'):
                     ctk.CTkLabel(self.news_container,
                         text=f"💡 {result['reasoning']}",
