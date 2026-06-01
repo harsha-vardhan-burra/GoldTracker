@@ -70,11 +70,40 @@ def get_market_context():
         session  = 'normal'
         reason   = ''
 
+    # ── Day of week context ──
+    day = now_ist.weekday()  # 0=Mon, 6=Sun
+
+    day_modifier = 0
+    day_reason   = ''
+
+    # ── Day of week patterns ──
+    DAY_PATTERNS = {
+        0: (-3, 'Monday — weekend gap effect, prices often lower'),
+        1: (+2, 'Tuesday — post-Monday recovery, typically stable'),
+        2: (-2, 'Wednesday — Fed announcement risk day'),
+        3: (+2, 'Thursday — typically stable mid-week'),
+        4: (-3, 'Friday — pre-weekend positioning, higher volatility'),
+        5: (-5, 'Saturday — MCX closed, international prices only'),
+        6: (-8, 'Sunday — markets closed, prices may be stale'),
+    }
+
+    day_modifier, day_reason = DAY_PATTERNS.get(day, (0, ''))
+
+    # Combine session + day modifiers
+    modifier = modifier + day_modifier
+    if day_reason:
+        if reason:
+            reason = f"{reason} · {day_reason}"
+        else:
+            reason = day_reason
+
     return {
-        'session':  session,
-        'modifier': modifier,
-        'reason':   reason,
-        'time_ist': now_ist.strftime('%H:%M IST')
+        'session':     session,
+        'modifier':    modifier,
+        'reason':      reason,
+        'time_ist':    now_ist.strftime('%H:%M IST'),
+        'day':         now_ist.strftime('%A'),
+        'day_modifier': day_modifier,
     }
 
 # ─── SIGNAL 1: Price vs 7-day Moving Average (30 pts) ────────────────────────
