@@ -1,315 +1,641 @@
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+"""
+core/analytics.py
+Gold price buy/sell signal engine for GoldTracker.
+
+Signals
+-------
+  S1  Price vs 7-day MA          (0–30 pts)
+  S2  Price vs 30-day MA         (0–30 pts)
+  S3  Momentum                   (0–25 pts)
+  S4  Volatility                 (0–15 pts)
+  ──  Time-of-day modifier       (−13 to +5 pts)
+  ──  Retail-premium modifier    (−10 to +8 pts)
+  ──  Clamp to [0, 100]
+"""
+
+from __future__ import annotations
+
+import bisect
+import datetime
+import logging
+import statistics
+from dataclasses import dataclass, field
+from functools import lru_cache
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Path bootstrap — only needed when running this file directly as a script.
+# In production the package is installed / PYTHONPATH is set externally.
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.db_manager import get_price_history
-import statistics
-import datetime
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ── CONFIG ─────────────────────────────────────────────────────────────────
+# All magic numbers live here.  Change once, applies everywhere.
+# ---------------------------------------------------------------------------
+
+# Signal weights (must sum to 100 for a clean score ceiling)
+WEIGHT_MA7        = 30
+WEIGHT_MA30       = 30
+WEIGHT_MOMENTUM   = 25
+WEIGHT_VOLATILITY = 15
+
+# MA thresholds (% deviation from moving average)
+MA_HOT_UPPER   =  3.0   # > this → overpriced
+MA_WARM_UPPER  =  1.0
+MA_COOL_LOWER  = -1.0
+MA_DIP_LOWER   = -3.0   # < this → strong dip
+
+# Momentum thresholds (% per period)
+MOM_HOT_UPPER  =  0.5
+MOM_WARM_UPPER =  0.1
+MOM_COOL_LOWER = -0.1
+MOM_DIP_LOWER  = -0.5
+
+# Volatility thresholds (std-dev of price, in ₹/gram)
+VOL_HIGH   = 300
+VOL_MED    = 150
+VOL_LOW    = 50
+
+# Retail-premium thresholds (% deviation from 30-day avg premium)
+PREMIUM_THRESHOLDS = [-20, -10, 10, 20]
+
+# Buy-label thresholds
+BUY_LABEL_GREAT = 75
+BUY_LABEL_GOOD  = 55
+BUY_LABEL_WAIT  = 35
+
+# Sell-label thresholds (applied to sell_score = 100 − buy_score)
+SELL_LABEL_GREAT = 75
+SELL_LABEL_GOOD  = 55
+SELL_LABEL_HOLD  = 35
+
+# Minimum premium history required for divergence signal
+MIN_PREMIUM_HISTORY = 7
+
+# DB look-back window
+HISTORY_DAYS = 30
+
+# Simple in-process cache TTL (seconds)
+_CACHE_TTL_SECONDS = 60
 
 
-# ─── TIME CONTEXT ────────────────────────────────────────────────────────────
-def get_market_context():
+# ---------------------------------------------------------------------------
+# ── RESULT TYPES ───────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SignalResult:
+    """Score + human-readable reason for a single signal."""
+    score:  int
+    reason: str
+
+
+@dataclass
+class PremiumResult:
+    """Output of the retail-premium divergence calculation."""
+    modifier:    int
+    label:       str
+    reason:      str
+    current:     Optional[float] = None
+    current_pct: Optional[float] = None
+    avg_7d:      Optional[float] = None
+    avg_30d:     Optional[float] = None
+    deviation_pct: Optional[float] = None
+
+
+@dataclass
+class MarketContext:
+    """Time-of-day and day-of-week context."""
+    session:      str
+    modifier:     int
+    reason:       str
+    time_ist:     str
+    day:          str
+    day_modifier: int
+
+
+@dataclass
+class AnalyticsResult:
+    """Full output returned by run_analytics()."""
+    # Indicators
+    ma7:        Optional[float]
+    ma30:       Optional[float]
+    momentum:   Optional[float]
+    volatility: Optional[float]
+
+    # Scores
+    buy_score:  int
+    sell_score: int
+
+    # Labels
+    buy_label:  str
+    sell_label: str
+
+    # Explanation
+    explanation: str
+
+    # Context
+    session:  str
+    time_ist: str
+    day:      str
+
+    # Premium
+    premium_label: str
+    premium_stats: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        """Serialise to a plain dict (for backward-compat with callers)."""
+        return {
+            "ma7":           self.ma7,
+            "ma30":          self.ma30,
+            "momentum":      self.momentum,
+            "volatility":    self.volatility,
+            "buy_score":     self.buy_score,
+            "sell_score":    self.sell_score,
+            "buy_label":     self.buy_label,
+            "sell_label":    self.sell_label,
+            "explanation":   self.explanation,
+            "session":       self.session,
+            "time_ist":      self.time_ist,
+            "day":           self.day,
+            "premium_label": self.premium_label,
+            "premium_stats": self.premium_stats,
+        }
+
+
+# ---------------------------------------------------------------------------
+# ── TIME / MARKET CONTEXT ──────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+# IST = UTC + 5:30  (India Standard Time has no DST)
+_IST_OFFSET = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+# (time-modifier, session-label, session-reason)
+_SESSION_WINDOWS: list[tuple[tuple[float, float], int, str, str]] = [
+    ((0.0,  9.0),  -8, "off-hours",  "off-hours — low volume, prices may be stale"),
+    ((9.0,  9.5),  -5, "mcx-open",   "MCX just opened — expect volatility"),
+    ((23.0, 23.5), -5, "mcx-close",  "MCX closing soon — possible price swing"),
+    ((19.5, 20.0), -5, "us-open",    "US market opening — international price moving"),
+    ((23.5, 24.0), -8, "off-hours",  "off-hours — low volume, prices may be stale"),
+]
+
+_DAY_PATTERNS: dict[int, tuple[int, str]] = {
+    0: (-3, "Monday — weekend gap effect, prices often lower"),
+    1: (+2, "Tuesday — post-Monday recovery, typically stable"),
+    2: (-2, "Wednesday — Fed announcement risk day"),
+    3: (+2, "Thursday — typically stable mid-week"),
+    4: (-3, "Friday — pre-weekend positioning, higher volatility"),
+    5: (-5, "Saturday — MCX closed, international prices only"),
+    6: (-8, "Sunday — markets closed, prices may be stale"),
+}
+
+
+def get_market_context(*, _now: Optional[datetime.datetime] = None) -> MarketContext:
     """
-    Returns current market session context based on IST time.
-    Used to adjust signal confidence and add reasoning.
+    Return the current market-session context based on IST time.
+
+    Parameters
+    ----------
+    _now:
+        Inject a datetime for testing.  Production code leaves this as None.
     """
-    now_ist = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) \
-              + datetime.timedelta(hours=5, minutes=30)
+    now_ist: datetime.datetime = _now or datetime.datetime.now(_IST_OFFSET)
     hour    = now_ist.hour
     minute  = now_ist.minute
-    time_decimal = hour + minute / 60
+    t       = hour + minute / 60.0          # decimal hour, e.g. 9.5 = 09:30
 
-    # ── Session detection ──
-    in_mcx   = 9.0 <= time_decimal <= 23.5
-    in_us    = time_decimal >= 19.5 or time_decimal <= 2.0
-    off_hours = time_decimal < 9.0 or time_decimal > 23.5
+    in_mcx   = 9.0 <= t <= 23.5
+    in_us    = t >= 19.5 or t <= 2.0
 
-    # ── Critical windows ──
-    mcx_open_window  = 9.0 <= time_decimal <= 9.5    # first 30 mins
-    mcx_close_window = 23.0 <= time_decimal <= 23.5  # last 30 mins
-    us_open_window   = 19.5 <= time_decimal <= 20.0  # US market open
+    # Determine session + base modifier
+    session  = "normal"
+    modifier = 0
+    reason   = ""
 
-    # ── Score modifier and reason ──
-    if off_hours:
-        modifier = -8
-        session  = 'off-hours'
-        reason   = 'off-hours — low volume, prices may be stale'
-
-    elif mcx_open_window:
-        modifier = -5
-        session  = 'mcx-open'
-        reason   = 'MCX just opened — expect volatility'
-
-    elif mcx_close_window:
-        modifier = -5
-        session  = 'mcx-close'
-        reason   = 'MCX closing soon — possible price swing'
-
-    elif us_open_window:
-        modifier = -5
-        session  = 'us-open'
-        reason   = 'US market opening — international price moving'
-
-    elif in_mcx and in_us:
-        modifier = +5
-        session  = 'peak'
-        reason   = 'peak hours — MCX and US markets both active'
-
-    elif in_mcx:
-        modifier = +3
-        session  = 'mcx'
-        reason   = 'MCX active — signal reliable'
-
-    elif in_us:
-        modifier = +2
-        session  = 'us'
-        reason   = 'US market active — spot price moving'
-
+    for (lo, hi), mod, sess, sess_reason in _SESSION_WINDOWS:
+        if lo <= t < hi:
+            modifier = mod
+            session  = sess
+            reason   = sess_reason
+            break
     else:
-        modifier = 0
-        session  = 'normal'
-        reason   = ''
+        # Not in any special window
+        if t < 9.0 or t > 23.5:
+            modifier, session, reason = -8, "off-hours", "off-hours — low volume, prices may be stale"
+        elif in_mcx and in_us:
+            modifier, session, reason = +5, "peak",      "peak hours — MCX and US markets both active"
+        elif in_mcx:
+            modifier, session, reason = +3, "mcx",       "MCX active — signal reliable"
+        elif in_us:
+            modifier, session, reason = +2, "us",        "US market active — spot price moving"
 
-    # ── Day of week context ──
-    day = now_ist.weekday()  # 0=Mon, 6=Sun
-
-    day_modifier = 0
-    day_reason   = ''
-
-    # ── Day of week patterns ──
-    DAY_PATTERNS = {
-        0: (-3, 'Monday — weekend gap effect, prices often lower'),
-        1: (+2, 'Tuesday — post-Monday recovery, typically stable'),
-        2: (-2, 'Wednesday — Fed announcement risk day'),
-        3: (+2, 'Thursday — typically stable mid-week'),
-        4: (-3, 'Friday — pre-weekend positioning, higher volatility'),
-        5: (-5, 'Saturday — MCX closed, international prices only'),
-        6: (-8, 'Sunday — markets closed, prices may be stale'),
-    }
-
-    day_modifier, day_reason = DAY_PATTERNS.get(day, (0, ''))
-
-    # Combine session + day modifiers
-    modifier = modifier + day_modifier
+    # Day-of-week modifier
+    day_modifier, day_reason = _DAY_PATTERNS.get(now_ist.weekday(), (0, ""))
+    modifier += day_modifier
     if day_reason:
-        if reason:
-            reason = f"{reason} · {day_reason}"
-        else:
-            reason = day_reason
+        reason = f"{reason} · {day_reason}" if reason else day_reason
 
-    return {
-        'session':     session,
-        'modifier':    modifier,
-        'reason':      reason,
-        'time_ist':    now_ist.strftime('%H:%M IST'),
-        'day':         now_ist.strftime('%A'),
-        'day_modifier': day_modifier,
-    }
-
-# ─── SIGNAL 1: Price vs 7-day Moving Average (30 pts) ────────────────────────
-def score_vs_ma7(current_price, ma7):
-    if not ma7 or not current_price:
-        return 15, "insufficient data for 7-day average"
-
-    diff_pct = ((current_price - ma7) / ma7) * 100
-
-    if diff_pct > 3:
-        return 0,  f"price is {diff_pct:.1f}% above 7-day average — overpriced short term"
-    elif diff_pct > 1:
-        return 8,  f"price is {diff_pct:.1f}% above 7-day average"
-    elif diff_pct >= -1:
-        return 15, f"price is near 7-day average (±1%)"
-    elif diff_pct >= -3:
-        return 23, f"price is {abs(diff_pct):.1f}% below 7-day average"
-    else:
-        return 30, f"price is {abs(diff_pct):.1f}% below 7-day average — good dip"
+    return MarketContext(
+        session      = session,
+        modifier     = modifier,
+        reason       = reason,
+        time_ist     = now_ist.strftime("%H:%M IST"),
+        day          = now_ist.strftime("%A"),
+        day_modifier = day_modifier,
+    )
 
 
-# ─── SIGNAL 2: Price vs 30-day Moving Average (30 pts) ───────────────────────
-def score_vs_ma30(current_price, ma30):
-    if not ma30 or not current_price:
-        return 15, "insufficient data for 30-day average"
+# ---------------------------------------------------------------------------
+# ── INDICATOR COMPUTATION ──────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
-    diff_pct = ((current_price - ma30) / ma30) * 100
-
-    if diff_pct > 3:
-        return 0,  f"price is {diff_pct:.1f}% above 30-day average — elevated"
-    elif diff_pct > 1:
-        return 8,  f"price is {diff_pct:.1f}% above 30-day average"
-    elif diff_pct >= -1:
-        return 15, f"price is near 30-day average"
-    elif diff_pct >= -3:
-        return 23, f"price is {abs(diff_pct):.1f}% below 30-day average"
-    else:
-        return 30, f"price is {abs(diff_pct):.1f}% below 30-day average — historically low"
-
-
-# ─── SIGNAL 3: Momentum (25 pts) ─────────────────────────────────────────────
-def score_momentum(momentum):
-    if momentum is None:
-        return 12, "trend direction unavailable"
-
-    if momentum > 0.5:
-        return 0,  "price rising fast — consider waiting"
-    elif momentum > 0.1:
-        return 8,  "price trending upward"
-    elif momentum >= -0.1:
-        return 15, "price is stable"
-    elif momentum >= -0.5:
-        return 20, "downward trend detected — potential buy window"
-    else:
-        return 25, "price falling sharply — strong buy signal"
-
-
-# ─── SIGNAL 4: Volatility (15 pts) ───────────────────────────────────────────
-def score_volatility(volatility):
-    if volatility is None:
-        return 7, "volatility unknown"
-
-    if volatility > 300:
-        return 0,  "high volatility — signal less reliable"
-    elif volatility > 150:
-        return 5,  "moderate volatility"
-    elif volatility > 50:
-        return 10, "low-moderate volatility"
-    else:
-        return 15, "price is stable — signal reliable"
-
-
-# ─── COMPUTE MOVING AVERAGES ──────────────────────────────────────────────────
-def compute_ma(prices, window):
+def compute_ma(prices: list[float], window: int) -> Optional[float]:
+    """Simple moving average of the last *window* prices."""
     if len(prices) < window:
         return None
-    return round(sum(prices[-window:]) / window, 2)
+    window_prices = prices[-window:]
+    return round(sum(window_prices) / window, 2)
 
 
-# ─── COMPUTE MOMENTUM ────────────────────────────────────────────────────────
-def compute_momentum(prices, window=5):
+def compute_momentum(prices: list[float], window: int = 5) -> Optional[float]:
+    """
+    Average of period-over-period % changes over the last *window* periods.
+    Requires at least window+1 data points.
+    """
     if len(prices) < window + 1:
         return None
-    recent = prices[-(window):]
+    window_slice = prices[-(window + 1):]
     changes = [
-        ((recent[i] - recent[i-1]) / recent[i-1]) * 100
-        for i in range(1, len(recent))
+        ((window_slice[i] - window_slice[i - 1]) / window_slice[i - 1]) * 100
+        for i in range(1, len(window_slice))
+        if window_slice[i - 1] != 0          # guard against zero-price rows
     ]
+    if not changes:
+        return None
     return round(sum(changes) / len(changes), 4)
 
 
-# ─── COMPUTE VOLATILITY ───────────────────────────────────────────────────────
-def compute_volatility(prices, window=10):
+def compute_volatility(prices: list[float], window: int = 10) -> Optional[float]:
+    """Standard deviation of the last *window* prices."""
     if len(prices) < window:
         return None
-    recent = prices[-window:]
-    return round(statistics.stdev(recent), 2)
+    try:
+        return round(statistics.stdev(prices[-window:]), 2)
+    except statistics.StatisticsError as exc:
+        logger.warning("compute_volatility: stdev failed — %s", exc)
+        return None
 
 
-# ─── BUILD EXPLANATION STRING ─────────────────────────────────────────────────
-def build_explanation(reasons):
-    # Filter out generic/filler reasons
-    filtered = [r for r in reasons if 'unavailable' not in r
-                                   and 'unknown' not in r
-                                   and 'insufficient' not in r]
-    if not filtered:
+def compute_premium_history(history: list[dict]) -> list[float]:
+    """
+    For each history row where both spot and retail prices exist,
+    compute the absolute premium (retail − spot).
+    """
+    premiums: list[float] = []
+    for row in history:
+        spot   = row.get("price_24k")
+        retail = row.get("retail_price")
+        if spot and retail and spot > 0:
+            premiums.append(retail - spot)
+    return premiums
+
+
+# ---------------------------------------------------------------------------
+# ── SCORING FUNCTIONS ──────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+def score_vs_ma7(current_price: float, ma7: Optional[float]) -> SignalResult:
+    """Score current price vs 7-day MA (max {WEIGHT_MA7} pts)."""
+    if not ma7 or not current_price:
+        return SignalResult(WEIGHT_MA7 // 2, "insufficient data for 7-day average")
+
+    diff_pct = ((current_price - ma7) / ma7) * 100
+
+    if diff_pct > MA_HOT_UPPER:
+        return SignalResult(0,               f"price is {diff_pct:.1f}% above 7-day average — overpriced short term")
+    if diff_pct > MA_WARM_UPPER:
+        return SignalResult(8,               f"price is {diff_pct:.1f}% above 7-day average")
+    if diff_pct >= MA_COOL_LOWER:
+        return SignalResult(15,              "price is near 7-day average (±1%)")
+    if diff_pct >= MA_DIP_LOWER:
+        return SignalResult(23,              f"price is {abs(diff_pct):.1f}% below 7-day average")
+    return     SignalResult(WEIGHT_MA7,      f"price is {abs(diff_pct):.1f}% below 7-day average — good dip")
+
+
+def score_vs_ma30(current_price: float, ma30: Optional[float]) -> SignalResult:
+    """Score current price vs 30-day MA (max {WEIGHT_MA30} pts)."""
+    if not ma30 or not current_price:
+        return SignalResult(WEIGHT_MA30 // 2, "insufficient data for 30-day average")
+
+    diff_pct = ((current_price - ma30) / ma30) * 100
+
+    if diff_pct > MA_HOT_UPPER:
+        return SignalResult(0,               f"price is {diff_pct:.1f}% above 30-day average — elevated")
+    if diff_pct > MA_WARM_UPPER:
+        return SignalResult(8,               f"price is {diff_pct:.1f}% above 30-day average")
+    if diff_pct >= MA_COOL_LOWER:
+        return SignalResult(15,              "price is near 30-day average")
+    if diff_pct >= MA_DIP_LOWER:
+        return SignalResult(23,              f"price is {abs(diff_pct):.1f}% below 30-day average")
+    return     SignalResult(WEIGHT_MA30,     f"price is {abs(diff_pct):.1f}% below 30-day average — historically low")
+
+
+def score_momentum(momentum: Optional[float]) -> SignalResult:
+    """Score recent price momentum (max {WEIGHT_MOMENTUM} pts)."""
+    if momentum is None:
+        return SignalResult(WEIGHT_MOMENTUM // 2, "trend direction unavailable")
+
+    if momentum > MOM_HOT_UPPER:
+        return SignalResult(0,                "price rising fast — consider waiting")
+    if momentum > MOM_WARM_UPPER:
+        return SignalResult(8,                "price trending upward")
+    if momentum >= MOM_COOL_LOWER:
+        return SignalResult(15,               "price is stable")
+    if momentum >= MOM_DIP_LOWER:
+        return SignalResult(20,               "downward trend detected — potential buy window")
+    return     SignalResult(WEIGHT_MOMENTUM,  "price falling sharply — strong buy signal")
+
+
+def score_volatility(volatility: Optional[float]) -> SignalResult:
+    """Score price volatility (max {WEIGHT_VOLATILITY} pts). Low vol = higher confidence."""
+    if volatility is None:
+        return SignalResult(WEIGHT_VOLATILITY // 2, "volatility unknown")
+
+    if volatility > VOL_HIGH:
+        return SignalResult(0,                "high volatility — signal less reliable")
+    if volatility > VOL_MED:
+        return SignalResult(5,                "moderate volatility")
+    if volatility > VOL_LOW:
+        return SignalResult(10,               "low-moderate volatility")
+    return     SignalResult(WEIGHT_VOLATILITY, "price is stable — signal reliable")
+
+
+def score_retail_divergence(
+    current_spot:    Optional[float],
+    current_retail:  Optional[float],
+    premium_history: list[float],
+) -> PremiumResult:
+    """
+    Compare the current retail premium against its 30-day historical average.
+
+    This is an *additive modifier*, not a standalone signal.
+    Range: −10 to +8 pts.
+    """
+    if not current_spot or not current_retail:
+        return PremiumResult(modifier=0, label="neutral", reason="retail data unavailable")
+
+    current_premium     = current_retail - current_spot
+    current_premium_pct = (current_premium / current_spot) * 100
+
+    if len(premium_history) < MIN_PREMIUM_HISTORY:
+        return PremiumResult(
+            modifier     = 0,
+            label        = "neutral",
+            reason       = f"retail premium ₹{current_premium:,.0f}/gram ({current_premium_pct:.1f}%) — insufficient history",
+            current      = round(current_premium, 2),
+            current_pct  = round(current_premium_pct, 2),
+        )
+
+    avg_7d  = sum(premium_history[-7:])  / 7
+    avg_30d = sum(premium_history[-30:]) / min(30, len(premium_history))
+
+    deviation_pct: float = ((current_premium - avg_30d) / avg_30d * 100) if avg_30d else 0.0
+
+    # Map deviation → (modifier, label, reason) using bisect for clean thresholds
+    _OUTCOMES = [
+        (+8,  "compressed", "retail premium unusually low — potential discount buying opportunity"),
+        (+4,  "low",        "retail premium below average — favourable buying conditions"),
+        ( 0,  "normal",     "retail premium normal"),
+        (-5,  "elevated",   "retail premium elevated"),
+        (-10, "extreme",    "retail premium extremely high — jewellers pricing in significant price rise"),
+    ]
+    idx = bisect.bisect_left(PREMIUM_THRESHOLDS, deviation_pct)
+    modifier, label, reason = _OUTCOMES[idx]
+
+    return PremiumResult(
+        modifier      = modifier,
+        label         = label,
+        reason        = reason,
+        current       = round(current_premium, 2),
+        current_pct   = round(current_premium_pct, 2),
+        avg_7d        = round(avg_7d, 2),
+        avg_30d       = round(avg_30d, 2),
+        deviation_pct = round(deviation_pct, 2),
+    )
+
+
+# ---------------------------------------------------------------------------
+# ── EXPLANATION / LABEL HELPERS ───────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+_NOISE_PHRASES = ("unavailable", "unknown", "insufficient")
+
+
+def build_explanation(reasons: list[str]) -> str:
+    """
+    Join meaningful signal reasons into a human-readable sentence.
+    Low-signal phrases are demoted rather than silently dropped.
+    """
+    meaningful = [r for r in reasons if not any(p in r for p in _NOISE_PHRASES)]
+    if not meaningful:
         return "Not enough historical data yet — check back after a few hours"
-    return " · ".join(filtered)
+    return " · ".join(meaningful)
 
 
-# ─── METER LABEL ─────────────────────────────────────────────────────────────
-def get_buy_label(score):
-    if score >= 75:
+def get_buy_label(score: int) -> str:
+    if score >= BUY_LABEL_GREAT:
         return "PERFECT TIME TO BUY"
-    elif score >= 55:
+    if score >= BUY_LABEL_GOOD:
         return "GOOD TIME TO BUY"
-    elif score >= 35:
+    if score >= BUY_LABEL_WAIT:
         return "WAIT A BIT MORE"
-    else:
-        return "BAD TIME TO BUY"
+    return "BAD TIME TO BUY"
 
 
-def get_sell_label(score):
-    inverted = 100 - score
-    if inverted >= 75:
+def get_sell_label(sell_score: int) -> str:
+    """
+    Sell label derived from the *sell* score (100 − buy_score).
+    Note: sell_score is passed in directly; the inversion happens in run_analytics().
+    """
+    if sell_score >= SELL_LABEL_GREAT:
         return "PERFECT TIME TO SELL"
-    elif inverted >= 55:
+    if sell_score >= SELL_LABEL_GOOD:
         return "GOOD TIME TO SELL"
-    elif inverted >= 35:
+    if sell_score >= SELL_LABEL_HOLD:
         return "HOLD FOR NOW"
-    else:
-        return "BAD TIME TO SELL"
+    return "BAD TIME TO SELL"
 
 
-# ─── MAIN ANALYTICS FUNCTION ─────────────────────────────────────────────────
-def run_analytics(current_price):
+# ---------------------------------------------------------------------------
+# ── HISTORY LOADER (with simple time-based cache) ─────────────────────────
+# ---------------------------------------------------------------------------
+
+_history_cache: dict = {}   # {"data": [...], "fetched_at": datetime}
+
+
+def _fetch_history() -> list[dict]:
     """
-    Takes current 24K price in INR.
-    Reads history from DB, computes all signals,
-    returns a dict ready to be merged into price data.
+    Wrapper around get_price_history() with a 60-second in-process cache
+    to avoid hammering the DB on rapid successive calls.
     """
+    global _history_cache
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cached_at: Optional[datetime.datetime] = _history_cache.get("fetched_at")
 
-    # Fetch last 30 days of history from DB
-    history = get_price_history(days=30)
-    prices  = [row['price_24k'] for row in history if row['price_24k']]
+    if cached_at and (now - cached_at).total_seconds() < _CACHE_TTL_SECONDS:
+        logger.debug("_fetch_history: serving from cache")
+        return _history_cache["data"]
 
-    # Compute indicators
+    try:
+        data = get_price_history(days=HISTORY_DAYS)
+    except Exception as exc:
+        logger.error("_fetch_history: DB error — %s", exc, exc_info=True)
+        return _history_cache.get("data", [])   # serve stale on failure
+
+    _history_cache = {"data": data, "fetched_at": now}
+    logger.debug("_fetch_history: loaded %d rows from DB", len(data))
+    return data
+
+
+# ---------------------------------------------------------------------------
+# ── MAIN ENTRY POINT ───────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+def run_analytics(
+    current_price: float,
+    retail_price:  Optional[float] = None,
+) -> AnalyticsResult:
+    """
+    Compute buy/sell signals for the given spot price.
+
+    Parameters
+    ----------
+    current_price:
+        Current 24K spot price in INR per gram.
+    retail_price:
+        Current retail (jewellery shop) price per gram, if available.
+
+    Returns
+    -------
+    AnalyticsResult
+        All indicators, scores, labels and explanations.
+        Call .to_dict() for a plain dict if needed.
+    """
+    if not current_price or current_price <= 0:
+        raise ValueError(f"run_analytics: invalid current_price={current_price!r}")
+
+    # ── 1. Fetch & clean history ──────────────────────────────────────────
+    history  = _fetch_history()
+    prices: list[float] = [
+        row["price_24k"] for row in history
+        if row.get("price_24k") and row["price_24k"] > 0
+    ]
+    premium_history = compute_premium_history(history)
+
+    logger.debug(
+        "run_analytics: %d clean price rows, %d premium rows",
+        len(prices), len(premium_history),
+    )
+
+    # ── 2. Compute indicators ─────────────────────────────────────────────
     ma7        = compute_ma(prices, 7)
     ma30       = compute_ma(prices, 30)
     momentum   = compute_momentum(prices)
     volatility = compute_volatility(prices)
 
-    # Score each signal
-    s1, r1 = score_vs_ma7(current_price, ma7)
-    s2, r2 = score_vs_ma30(current_price, ma30)
-    s3, r3 = score_momentum(momentum)
-    s4, r4 = score_volatility(volatility)
+    # ── 3. Score each signal ──────────────────────────────────────────────
+    sig1 = score_vs_ma7(current_price, ma7)
+    sig2 = score_vs_ma30(current_price, ma30)
+    sig3 = score_momentum(momentum)
+    sig4 = score_volatility(volatility)
 
-    # Time-of-day context
-    time_ctx  = get_market_context()
-    modifier  = time_ctx['modifier']
-    time_reason = time_ctx['reason']
+    # ── 4. Time context ───────────────────────────────────────────────────
+    time_ctx = get_market_context()
 
-    # Apply modifier — clamp between 0 and 100
-    raw_score  = s1 + s2 + s3 + s4
-    buy_score  = max(0, min(100, raw_score + modifier))
+    # ── 5. Retail-premium divergence modifier ─────────────────────────────
+    premium = score_retail_divergence(current_price, retail_price, premium_history)
+
+    # ── 6. Assemble score ─────────────────────────────────────────────────
+    raw_score = sig1.score + sig2.score + sig3.score + sig4.score
+    buy_score = max(0, min(100, raw_score + time_ctx.modifier + premium.modifier))
     sell_score = 100 - buy_score
 
-    # Build explanation including time context
-    reasons = [r1, r2, r3, r4]
-    if time_reason:
-        reasons.append(time_reason)
+    logger.info(
+        "run_analytics: raw=%d time_mod=%d premium_mod=%d → buy=%d sell=%d  [%s]",
+        raw_score, time_ctx.modifier, premium.modifier,
+        buy_score, sell_score, time_ctx.time_ist,
+    )
+
+    # ── 7. Build explanation ──────────────────────────────────────────────
+    reasons = [sig1.reason, sig2.reason, sig3.reason, sig4.reason]
+    if time_ctx.reason:
+        reasons.append(time_ctx.reason)
+    if premium.reason and premium.label not in ("neutral",):
+        reasons.append(premium.reason)
 
     explanation = build_explanation(reasons)
 
-    return {
-        'ma7':         ma7,
-        'ma30':        ma30,
-        'momentum':    momentum,
-        'volatility':  volatility,
-        'buy_score':   buy_score,
-        'sell_score':  sell_score,
-        'explanation': explanation,
-        'buy_label':   get_buy_label(buy_score),
-        'sell_label':  get_sell_label(sell_score),
-        'session':     time_ctx['session'],
-        'time_ist':    time_ctx['time_ist'],
-    }
+    # ── 8. Return structured result ───────────────────────────────────────
+    return AnalyticsResult(
+        ma7          = ma7,
+        ma30         = ma30,
+        momentum     = momentum,
+        volatility   = volatility,
+        buy_score    = buy_score,
+        sell_score   = sell_score,
+        buy_label    = get_buy_label(buy_score),
+        sell_label   = get_sell_label(sell_score),
+        explanation  = explanation,
+        session      = time_ctx.session,
+        time_ist     = time_ctx.time_ist,
+        day          = time_ctx.day,
+        premium_label = premium.label,
+        premium_stats = {
+            "current_premium":     premium.current,
+            "current_premium_pct": premium.current_pct,
+            "avg_premium_7d":      premium.avg_7d,
+            "avg_premium_30d":     premium.avg_30d,
+            "deviation_pct":       premium.deviation_pct,
+        },
+    )
 
 
-# ─── Quick test ───────────────────────────────────────────────────────────────
-if __name__ == '__main__':
-    test_price = 13920.0
-    result = run_analytics(test_price)
+# ---------------------------------------------------------------------------
+# ── CLI smoke-test ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
-    print('\n' + '='*50)
-    print('ANALYTICS RESULT')
-    print('='*50)
-    print(f"MA7          : {result['ma7']}")
-    print(f"MA30         : {result['ma30']}")
-    print(f"Momentum     : {result['momentum']}")
-    print(f"Volatility   : {result['volatility']}")
-    print(f"Session      : {result['session']} ({result['time_ist']})")
-    print(f"Buy Score    : {result['buy_score']}/100")
-    print(f"Sell Score   : {result['sell_score']}/100")
-    print(f"Buy Signal   : {result['buy_label']}")
-    print(f"Sell Signal  : {result['sell_label']}")
-    print(f"Explanation  : {result['explanation']}")
-    print('='*50)
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s — %(message)s")
+
+    TEST_PRICE  = 13_920.0
+    TEST_RETAIL = 14_350.0
+
+    result = run_analytics(TEST_PRICE, retail_price=TEST_RETAIL)
+
+    WIDTH = 50
+    print("\n" + "=" * WIDTH)
+    print("ANALYTICS RESULT")
+    print("=" * WIDTH)
+    print(f"{'MA7':<20}: {result.ma7}")
+    print(f"{'MA30':<20}: {result.ma30}")
+    print(f"{'Momentum':<20}: {result.momentum}")
+    print(f"{'Volatility':<20}: {result.volatility}")
+    print(f"{'Session':<20}: {result.session} ({result.time_ist}, {result.day})")
+    print(f"{'Premium label':<20}: {result.premium_label}")
+    print(f"{'Buy Score':<20}: {result.buy_score}/100")
+    print(f"{'Sell Score':<20}: {result.sell_score}/100")
+    print(f"{'Buy Signal':<20}: {result.buy_label}")
+    print(f"{'Sell Signal':<20}: {result.sell_label}")
+    print(f"{'Explanation':<20}: {result.explanation}")
+    print("=" * WIDTH)
