@@ -4,7 +4,78 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.db_manager import get_price_history
 import statistics
+import datetime
 
+
+# ─── TIME CONTEXT ────────────────────────────────────────────────────────────
+def get_market_context():
+    """
+    Returns current market session context based on IST time.
+    Used to adjust signal confidence and add reasoning.
+    """
+    now_ist = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) \
+              + datetime.timedelta(hours=5, minutes=30)
+    hour    = now_ist.hour
+    minute  = now_ist.minute
+    time_decimal = hour + minute / 60
+
+    # ── Session detection ──
+    in_mcx   = 9.0 <= time_decimal <= 23.5
+    in_us    = time_decimal >= 19.5 or time_decimal <= 2.0
+    off_hours = time_decimal < 9.0 or time_decimal > 23.5
+
+    # ── Critical windows ──
+    mcx_open_window  = 9.0 <= time_decimal <= 9.5    # first 30 mins
+    mcx_close_window = 23.0 <= time_decimal <= 23.5  # last 30 mins
+    us_open_window   = 19.5 <= time_decimal <= 20.0  # US market open
+
+    # ── Score modifier and reason ──
+    if off_hours:
+        modifier = -8
+        session  = 'off-hours'
+        reason   = 'off-hours — low volume, prices may be stale'
+
+    elif mcx_open_window:
+        modifier = -5
+        session  = 'mcx-open'
+        reason   = 'MCX just opened — expect volatility'
+
+    elif mcx_close_window:
+        modifier = -5
+        session  = 'mcx-close'
+        reason   = 'MCX closing soon — possible price swing'
+
+    elif us_open_window:
+        modifier = -5
+        session  = 'us-open'
+        reason   = 'US market opening — international price moving'
+
+    elif in_mcx and in_us:
+        modifier = +5
+        session  = 'peak'
+        reason   = 'peak hours — MCX and US markets both active'
+
+    elif in_mcx:
+        modifier = +3
+        session  = 'mcx'
+        reason   = 'MCX active — signal reliable'
+
+    elif in_us:
+        modifier = +2
+        session  = 'us'
+        reason   = 'US market active — spot price moving'
+
+    else:
+        modifier = 0
+        session  = 'normal'
+        reason   = ''
+
+    return {
+        'session':  session,
+        'modifier': modifier,
+        'reason':   reason,
+        'time_ist': now_ist.strftime('%H:%M IST')
+    }
 
 # ─── SIGNAL 1: Price vs 7-day Moving Average (30 pts) ────────────────────────
 def score_vs_ma7(current_price, ma7):
@@ -162,10 +233,22 @@ def run_analytics(current_price):
     s3, r3 = score_momentum(momentum)
     s4, r4 = score_volatility(volatility)
 
-    buy_score  = s1 + s2 + s3 + s4
+    # Time-of-day context
+    time_ctx  = get_market_context()
+    modifier  = time_ctx['modifier']
+    time_reason = time_ctx['reason']
+
+    # Apply modifier — clamp between 0 and 100
+    raw_score  = s1 + s2 + s3 + s4
+    buy_score  = max(0, min(100, raw_score + modifier))
     sell_score = 100 - buy_score
 
-    explanation = build_explanation([r1, r2, r3, r4])
+    # Build explanation including time context
+    reasons = [r1, r2, r3, r4]
+    if time_reason:
+        reasons.append(time_reason)
+
+    explanation = build_explanation(reasons)
 
     return {
         'ma7':         ma7,
@@ -177,13 +260,14 @@ def run_analytics(current_price):
         'explanation': explanation,
         'buy_label':   get_buy_label(buy_score),
         'sell_label':  get_sell_label(sell_score),
+        'session':     time_ctx['session'],
+        'time_ist':    time_ctx['time_ist'],
     }
 
 
 # ─── Quick test ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    # Simulate with current price
-    test_price = 13504.0
+    test_price = 13920.0
     result = run_analytics(test_price)
 
     print('\n' + '='*50)
@@ -193,6 +277,7 @@ if __name__ == '__main__':
     print(f"MA30         : {result['ma30']}")
     print(f"Momentum     : {result['momentum']}")
     print(f"Volatility   : {result['volatility']}")
+    print(f"Session      : {result['session']} ({result['time_ist']})")
     print(f"Buy Score    : {result['buy_score']}/100")
     print(f"Sell Score   : {result['sell_score']}/100")
     print(f"Buy Signal   : {result['buy_label']}")
