@@ -111,13 +111,12 @@ def get_data_quality(data):
 
     # Check spot price source
     source = data.get('data_source', 'unknown')
-    if source == 'goldapi.io':
+    if source == 'gold-api.com':
         sources_live += 1
-        details.append('GoldAPI: live')
-    elif source == 'gold-api.com':
+        details.append('gold-api.com: live')
+    elif source == 'goldapi.io':
         sources_live += 1
-        score -= 10  # slight penalty for using fallback
-        details.append('GoldAPI: down (fallback active)')
+        details.append('GoldAPI.io: live (backup)')
     else:
         score -= 25
         details.append('Spot price: unavailable')

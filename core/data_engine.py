@@ -33,26 +33,7 @@ SCRAPE_HEADERS = {
 
 # ─── FETCH 1: Gold spot price in USD ─────────────────────────────────────────
 def fetch_spot_price_usd():
-    # ── Primary: GoldAPI.io ──
-    try:
-        api_key = load_api_key()
-        url     = 'https://www.goldapi.io/api/XAU/USD'
-        headers = {'x-access-token': api_key}
-        r       = requests.get(url, headers=headers, timeout=10)
-
-        if r.status_code == 200:
-            data       = r.json()
-            price_oz   = data.get('price', 0)
-            price_gram = round(price_oz / 31.1035, 4)
-            print(f'[GoldAPI] Spot: ${price_oz}/oz → ${price_gram}/gram')
-            return price_oz, price_gram, 'goldapi.io'
-        else:
-            print(f'[GoldAPI] Failed: {r.status_code} — trying fallback')
-
-    except Exception as e:
-        print(f'[GoldAPI] Error: {e} — trying fallback')
-
-    # ── Fallback: gold-api.com (no key needed) ──
+    # ── Primary: gold-api.com (no key, no limits) ──
     try:
         r = requests.get('https://api.gold-api.com/price/XAU', timeout=10)
 
@@ -60,16 +41,35 @@ def fetch_spot_price_usd():
             data       = r.json()
             price_oz   = data.get('price', 0)
             price_gram = round(price_oz / 31.1035, 4)
-            print(f'[GoldAPI Fallback] Spot: ${price_oz}/oz → ${price_gram}/gram')
+            print(f'[GoldAPI] Spot: ${price_oz}/oz → ${price_gram}/gram')
             return price_oz, price_gram, 'gold-api.com'
         else:
-            print(f'[GoldAPI Fallback] Failed: {r.status_code}')
+            print(f'[gold-api.com] Failed: {r.status_code} — trying fallback')
 
     except Exception as e:
-        print(f'[GoldAPI Fallback] Error: {e}')
+        print(f'[gold-api.com] Error: {e} — trying fallback')
+
+    # ── Fallback: GoldAPI.io (100 req/month, use sparingly) ──
+    try:
+        api_key = load_api_key()
+        if api_key:
+            url     = 'https://www.goldapi.io/api/XAU/USD'
+            headers = {'x-access-token': api_key}
+            r       = requests.get(url, headers=headers, timeout=10)
+
+            if r.status_code == 200:
+                data       = r.json()
+                price_oz   = data.get('price', 0)
+                price_gram = round(price_oz / 31.1035, 4)
+                print(f'[GoldAPI.io Fallback] Spot: ${price_oz}/oz → ${price_gram}/gram')
+                return price_oz, price_gram, 'goldapi.io'
+            else:
+                print(f'[GoldAPI.io] Failed: {r.status_code}')
+
+    except Exception as e:
+        print(f'[GoldAPI.io] Error: {e}')
 
     return None, None, 'unavailable'
-
 
 # ─── FETCH 2: USD to INR exchange rate ───────────────────────────────────────
 def fetch_usd_inr():
