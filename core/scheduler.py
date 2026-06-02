@@ -59,7 +59,7 @@ def run_cycle():
         print(f'[Scheduler] Data quality: {quality_label} ({quality_score}/100) — {sources_live}/3 sources live')
 
         # Step 2: Run analytics on current price
-        analytics = run_analytics(data['price_24k'])
+        analytics = run_analytics(data['price_24k'], data.get('retail_price')).to_dict()
 
         # Step 3: Merge analytics into data
         data['ma7']         = analytics['ma7']
