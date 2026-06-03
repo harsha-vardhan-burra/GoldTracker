@@ -154,6 +154,10 @@ class AnalyticsResult:
     premium_label: str
     premium_stats: dict = field(default_factory=dict)
 
+    trend_adx:       float = 0.0
+    trend_label:     str   = ""
+    trend_direction: str   = "neutral"
+
     def to_dict(self) -> dict:
         """Serialise to a plain dict (for backward-compat with callers)."""
         return {
@@ -171,6 +175,9 @@ class AnalyticsResult:
             "day":           self.day,
             "premium_label": self.premium_label,
             "premium_stats": self.premium_stats,
+            "trend_adx":       self.trend_adx,
+            "trend_label":     self.trend_label,
+            "trend_direction": self.trend_direction,
         }
 
 
@@ -296,6 +303,175 @@ def compute_volatility(prices: list[float], window: int = 10) -> Optional[float]
         logger.warning("compute_volatility: stdev failed — %s", exc)
         return None
 
+# ---------------------------------------------------------------------------
+# ── TREND STRENGTH (Simplified ADX) ───────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+# Minimum data points needed for a meaningful ADX calculation
+_ADX_MIN_PERIODS = 14
+
+# ADX strength thresholds → (label, buy_modifier, sell_modifier)
+_ADX_OUTCOMES: list[tuple[float, str, int]] = [
+    # (threshold, label, score_modifier)
+    # bisect_left on thresholds maps index → outcome
+    (25.0, "no trend — signal less reliable",          -5),
+    (50.0, "moderate trend — signal moderately reliable", 0),
+    (75.0, "strong trend — high conviction signal",    +5),
+]
+_ADX_THRESHOLDS = [o[0] for o in _ADX_OUTCOMES]
+
+
+@dataclass
+class TrendStrengthResult:
+    """Output of the trend strength calculation."""
+    adx:          float
+    label:        str
+    modifier:     int
+    direction:    str   # 'bullish' | 'bearish' | 'neutral'
+    reasoning:    str
+
+
+def compute_adx(prices: list[float], period: int = 14) -> Optional[float]:
+    """
+    Compute a simplified ADX (Average Directional Index).
+
+    Standard ADX requires high/low/close candles.
+    We approximate using close-only data by treating the absolute
+    period-over-period change as a proxy for True Range.
+
+    Parameters
+    ----------
+    prices : list of closing prices, oldest first
+    period : smoothing period (default 14, industry standard)
+
+    Returns
+    -------
+    ADX value 0-100, or None if insufficient data.
+    """
+    if len(prices) < period * 2:
+        return None
+
+    # Step 1 — Directional movements
+    # +DM = upward movement, -DM = downward movement
+    plus_dm:  list[float] = []
+    minus_dm: list[float] = []
+
+    for i in range(1, len(prices)):
+        move = prices[i] - prices[i - 1]
+        plus_dm.append(max(move, 0.0))
+        minus_dm.append(max(-move, 0.0))
+
+    # Step 2 — True Range proxy (absolute price change)
+    tr = [abs(prices[i] - prices[i - 1]) for i in range(1, len(prices))]
+
+    def _smooth(values: list[float], n: int) -> list[float]:
+        """Wilder smoothing — industry standard for ADX."""
+        if len(values) < n:
+            return []
+        smoothed = [sum(values[:n])]
+        for v in values[n:]:
+            smoothed.append(smoothed[-1] - smoothed[-1] / n + v)
+        return smoothed
+
+    # Step 3 — Smooth all three series
+    smooth_tr       = _smooth(tr,       period)
+    smooth_plus_dm  = _smooth(plus_dm,  period)
+    smooth_minus_dm = _smooth(minus_dm, period)
+
+    if not smooth_tr:
+        return None
+
+    # Step 4 — Directional indicators
+    # Guard against division by zero
+    plus_di  = [
+        100 * p / t if t > 0 else 0.0
+        for p, t in zip(smooth_plus_dm, smooth_tr)
+    ]
+    minus_di = [
+        100 * m / t if t > 0 else 0.0
+        for m, t in zip(smooth_minus_dm, smooth_tr)
+    ]
+
+    # Step 5 — DX then ADX
+    dx_values: list[float] = []
+    for p, m in zip(plus_di, minus_di):
+        di_sum  = p + m
+        di_diff = abs(p - m)
+        dx_values.append(100 * di_diff / di_sum if di_sum > 0 else 0.0)
+
+    if len(dx_values) < period:
+        return None
+
+    adx = sum(dx_values[-period:]) / period
+    return round(adx, 2)
+
+
+def score_trend_strength(
+    prices:   list[float],
+    momentum: Optional[float],
+) -> TrendStrengthResult:
+    """
+    Compute trend strength using ADX and classify it.
+
+    Parameters
+    ----------
+    prices   : historical price list, oldest first
+    momentum : pre-computed momentum value (reused, not recomputed)
+
+    Returns
+    -------
+    TrendStrengthResult with ADX score, label, modifier and reasoning.
+    """
+    adx = compute_adx(prices)
+
+    if adx is None:
+        return TrendStrengthResult(
+            adx       = 0.0,
+            label     = "insufficient data for trend strength",
+            modifier  = 0,
+            direction = "neutral",
+            reasoning = "trend strength unavailable — need 28+ data points",
+        )
+
+    # Map ADX to outcome using bisect
+    idx            = bisect.bisect_left(_ADX_THRESHOLDS, adx)
+    idx            = min(idx, len(_ADX_OUTCOMES) - 1)
+    _, label, modifier = _ADX_OUTCOMES[idx]
+
+    # Direction from momentum
+    if momentum is None:
+        direction = "neutral"
+    elif momentum > 0.1:
+        direction = "bullish"
+    elif momentum < -0.1:
+        direction = "bearish"
+    else:
+        direction = "neutral"
+
+    # Flip modifier: strong bearish trend = good buy signal
+    # Strong bullish trend = good sell signal
+    if direction == "bearish":
+        modifier = +abs(modifier)   # strong downtrend → buy confidence boost
+    elif direction == "bullish":
+        modifier = -abs(modifier)   # strong uptrend → caution for buyers
+
+    # Build reasoning
+    adx_label = (
+        "weak"     if adx < 25 else
+        "moderate" if adx < 50 else
+        "strong"   if adx < 75 else
+        "very strong"
+    )
+
+    reasoning = f"{adx_label} {direction} trend (ADX {adx:.1f})"
+
+    return TrendStrengthResult(
+        adx       = adx,
+        label     = label,
+        modifier  = modifier,
+        direction = direction,
+        reasoning = reasoning,
+    )
 
 def compute_premium_history(history: list[dict]) -> list[float]:
     """
@@ -555,10 +731,11 @@ def run_analytics(
     volatility = compute_volatility(prices)
 
     # ── 3. Score each signal ──────────────────────────────────────────────
-    sig1 = score_vs_ma7(current_price, ma7)
-    sig2 = score_vs_ma30(current_price, ma30)
-    sig3 = score_momentum(momentum)
-    sig4 = score_volatility(volatility)
+    sig1  = score_vs_ma7(current_price, ma7)
+    sig2  = score_vs_ma30(current_price, ma30)
+    sig3  = score_momentum(momentum)
+    sig4  = score_volatility(volatility)
+    trend = score_trend_strength(prices, momentum)
 
     # ── 4. Time context ───────────────────────────────────────────────────
     time_ctx = get_market_context()
@@ -567,8 +744,13 @@ def run_analytics(
     premium = score_retail_divergence(current_price, retail_price, premium_history)
 
     # ── 6. Assemble score ─────────────────────────────────────────────────
-    raw_score = sig1.score + sig2.score + sig3.score + sig4.score
-    buy_score = max(0, min(100, raw_score + time_ctx.modifier + premium.modifier))
+    raw_score  = sig1.score + sig2.score + sig3.score + sig4.score
+    buy_score  = max(0, min(100,
+        raw_score
+        + time_ctx.modifier
+        + premium.modifier
+        + trend.modifier          # ← add this
+    ))
     sell_score = 100 - buy_score
 
     logger.info(
@@ -583,31 +765,36 @@ def run_analytics(
         reasons.append(time_ctx.reason)
     if premium.reason and premium.label not in ("neutral",):
         reasons.append(premium.reason)
+    if trend.reasoning and "unavailable" not in trend.reasoning:
+        reasons.append(trend.reasoning)
 
     explanation = build_explanation(reasons)
 
     # ── 8. Return structured result ───────────────────────────────────────
     return AnalyticsResult(
-        ma7          = ma7,
-        ma30         = ma30,
-        momentum     = momentum,
-        volatility   = volatility,
-        buy_score    = buy_score,
-        sell_score   = sell_score,
-        buy_label    = get_buy_label(buy_score),
-        sell_label   = get_sell_label(sell_score),
-        explanation  = explanation,
-        session      = time_ctx.session,
-        time_ist     = time_ctx.time_ist,
-        day          = time_ctx.day,
-        premium_label = premium.label,
-        premium_stats = {
+        ma7           = ma7,
+        ma30          = ma30,
+        momentum      = momentum,
+        volatility    = volatility,
+        buy_score     = buy_score,
+        sell_score    = sell_score,
+        buy_label     = get_buy_label(buy_score),
+        sell_label    = get_sell_label(sell_score),
+        explanation   = explanation,
+        session       = time_ctx.session,
+        time_ist      = time_ctx.time_ist,
+        day           = time_ctx.day,
+        premium_label  = premium.label,
+        premium_stats  = {
             "current_premium":     premium.current,
             "current_premium_pct": premium.current_pct,
             "avg_premium_7d":      premium.avg_7d,
             "avg_premium_30d":     premium.avg_30d,
             "deviation_pct":       premium.deviation_pct,
         },
+        trend_adx      = trend.adx,
+        trend_label    = trend.label,
+        trend_direction= trend.direction,
     )
 
 
@@ -638,4 +825,7 @@ if __name__ == "__main__":
     print(f"{'Buy Signal':<20}: {result.buy_label}")
     print(f"{'Sell Signal':<20}: {result.sell_label}")
     print(f"{'Explanation':<20}: {result.explanation}")
+    print(f"{'Trend ADX':<20}: {result.trend_adx}")
+    print(f"{'Trend Label':<20}: {result.trend_label}")
+    print(f"{'Trend Direction':<20}: {result.trend_direction}")
     print("=" * WIDTH)
