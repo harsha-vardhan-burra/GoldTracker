@@ -57,9 +57,10 @@ def main():
 def _launch_popup(scheduler):
     try:
         from ui.startup_popup import StartupPopup
+        import customtkinter as ctk
+
         app = StartupPopup()
 
-        import customtkinter as ctk
         ctk.CTkButton(
             app,
             text='Open Full Dashboard →',

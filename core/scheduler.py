@@ -158,11 +158,14 @@ class GoldScheduler:
         else:
             print(f'[GapHandler] Last reading {int(age_minutes)} mins ago — no gap')
 
-    def start(self):
+    def start(self, check_gaps: bool = True) -> None:
         if self.running:
             print('[Scheduler] Already running')
             return
-        self.check_and_mark_gap()
+
+        if check_gaps:
+            self.check_and_mark_gap()
+
         self.running = True
         self.thread  = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
@@ -201,8 +204,8 @@ if __name__ == '__main__':
             print(f"[UI Callback] Price updated: ₹{data['price_24k']}/gram")
 
         scheduler = GoldScheduler(on_update=on_update)
-        scheduler.interval_secs = 10   # 10 seconds for testing only
-        scheduler.start()
+        scheduler.interval_secs = 10
+        scheduler.start(check_gaps=False)
 
         time.sleep(15)
         scheduler.stop()

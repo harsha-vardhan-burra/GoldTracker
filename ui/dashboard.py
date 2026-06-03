@@ -7,8 +7,8 @@ import threading
 import datetime
 from database.db_manager import (
     get_latest_price, get_price_history,
-    get_active_alerts, add_alert, trigger_alert,
-    get_setting, update_setting
+    get_active_alerts, add_alert, get_setting, 
+    update_setting
 )
 from core.analytics import get_buy_label, get_sell_label
 from core.scheduler import GoldScheduler
@@ -527,9 +527,9 @@ class Dashboard(ctk.CTk):
             self.ins_status.configure(text=source_display)
 
         # Data quality
-        quality = data.get('data_quality')
-        quality_score = data.get('data_quality_score')
-        if hasattr(self, 'ins_quality') and quality:
+        quality = data.get('data_quality', 'HIGH')
+        quality_score = data.get('data_quality_score', 100)
+        if hasattr(self, 'ins_quality'):
             quality_colors = {
                 'HIGH':   '#00C853',
                 'MEDIUM': '#FF6D00',
@@ -550,14 +550,23 @@ class Dashboard(ctk.CTk):
     # =========================================================================
     # TAB 2 — CHARTS
     # =========================================================================
-    def _build_charts_tab(self):
+    def _build_charts_tab(self) -> None:
         p = self.content_frame
 
-        ctk.CTkLabel(p, text='Price Charts',
-            font=ctk.CTkFont(size=22, weight='bold'), text_color=TEXT
-        ).pack(anchor='w', padx=24, pady=(20, 16))
+        ctk.CTkLabel(
+            p, text='Price Charts',
+            font=ctk.CTkFont(size=22, weight='bold'),
+            text_color=TEXT
+        ).pack(anchor='w', padx=24, pady=(20, 4))
 
-        # Time range toggle
+        ctk.CTkLabel(
+            p,
+            text='Historical 24K gold spot price — calculated from live market data',
+            font=ctk.CTkFont(size=11),
+            text_color=SUBTEXT
+        ).pack(anchor='w', padx=24, pady=(0, 16))
+
+        # ── Time range toggle ──
         toggle_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=10)
         toggle_frame.pack(padx=24, pady=(0, 16), anchor='w')
 
@@ -570,130 +579,237 @@ class Dashboard(ctk.CTk):
                 value=label,
                 command=self._render_chart,
                 text_color=TEXT,
-                fg_color=GOLD_DARK
-            ).pack(side='left', padx=16, pady=10)
+                fg_color=GOLD_DARK,
+                border_color=GOLD_DARK,
+            ).pack(side='left', padx=20, pady=10)
 
-        # Chart canvas area
-        self.chart_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=12, height=320)
-        self.chart_frame.pack(fill='x', padx=24, pady=(0, 20))
-        self.chart_frame.pack_propagate(False)
+        # ── Chart container ──
+        self.chart_container = ctk.CTkFrame(
+            p, fg_color=CARD, corner_radius=12
+        )
+        self.chart_container.pack(fill='x', padx=24, pady=(0, 20))
 
         self._render_chart()
 
 
-    def _render_chart(self):
-        # Clear existing chart
-        for widget in self.chart_frame.winfo_children():
+    def _render_chart(self) -> None:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        import datetime
+
+        # Clear existing chart widgets
+        for widget in self.chart_container.winfo_children():
             widget.destroy()
 
         range_map = {'24H': 1, '7D': 7, '30D': 30}
-        days = range_map.get(self.chart_range.get(), 1)
-        history = get_price_history(days=days)
+        days      = range_map.get(self.chart_range.get(), 1)
+        history   = get_price_history(days=days)
 
-        if len(history) < 2:
+        # Filter out gap markers and bad rows
+        clean = [
+            r for r in history
+            if r.get('price_24k')
+            and r.get('data_source') != 'gap_marker'
+            and r['price_24k'] > 10000
+        ]
+
+        if len(clean) < 2:
             ctk.CTkLabel(
-                self.chart_frame,
-                text='Not enough data yet.\nKeep the app running to build up history.',
-                font=ctk.CTkFont(size=14),
+                self.chart_container,
+                text='Not enough data yet — keep the app running to build history.',
+                font=ctk.CTkFont(size=13),
                 text_color=SUBTEXT,
                 justify='center'
-            ).place(relx=0.5, rely=0.5, anchor='center')
+            ).pack(pady=60)
             return
 
-        # Draw simple ASCII-style chart using canvas
-        try:
-            import tkinter as tk
-            canvas = tk.Canvas(
-                self.chart_frame,
-                bg='#242424',
-                highlightthickness=0,
-                height=280
+        # ── Parse data ──
+        timestamps = []
+        prices     = []
+        for row in clean:
+            try:
+                ts = datetime.datetime.fromisoformat(str(row['timestamp']))
+                timestamps.append(ts)
+                prices.append(row['price_24k'])
+            except Exception:
+                continue
+
+        if len(timestamps) < 2:
+            return
+
+        # ── Style constants ──
+        BG_COLOR    = '#242424'
+        GRID_COLOR  = '#333333'
+        GOLD_COLOR  = '#FFD700'
+        GREEN_COLOR = '#00C853'
+        TEXT_COLOR  = '#AAAAAA'
+        SPINE_COLOR = '#333333'
+
+        # ── Build figure ──
+        fig = Figure(
+            figsize     = (14, 4.2),
+            dpi         = 96,
+            facecolor   = BG_COLOR,
+            tight_layout= True,
+        )
+        ax = fig.add_subplot(111, facecolor=BG_COLOR)
+
+        # ── Plot line with gradient fill ──
+        ax.plot(
+            timestamps, prices,
+            color     = GOLD_COLOR,
+            linewidth = 1.8,
+            zorder    = 3,
+            solid_capstyle = 'round',
+        )
+
+        # Gradient fill under the line
+        ax.fill_between(
+            timestamps, prices,
+            min(prices),
+            alpha = 0.15,
+            color = GOLD_COLOR,
+            zorder= 2,
+        )
+
+        # ── Start and end markers ──
+        ax.scatter(
+            [timestamps[0]],  [prices[0]],
+            color=GOLD_COLOR, s=40, zorder=5, linewidths=0
+        )
+        ax.scatter(
+            [timestamps[-1]], [prices[-1]],
+            color=GREEN_COLOR, s=50, zorder=5, linewidths=0
+        )
+
+        # ── Price labels at start and end ──
+        ax.annotate(
+            f"₹{prices[0]:,.0f}",
+            xy         = (timestamps[0], prices[0]),
+            xytext     = (8, 6),
+            textcoords = 'offset points',
+            color      = TEXT_COLOR,
+            fontsize   = 8,
+        )
+        ax.annotate(
+            f"₹{prices[-1]:,.0f}",
+            xy         = (timestamps[-1], prices[-1]),
+            xytext     = (-60, 6),
+            textcoords = 'offset points',
+            color      = GREEN_COLOR,
+            fontsize   = 9,
+            fontweight = 'bold',
+        )
+
+        # ── High / Low markers ──
+        max_price = max(prices)
+        min_price = min(prices)
+        max_idx   = prices.index(max_price)
+        min_idx   = prices.index(min_price)
+
+        ax.scatter(
+            [timestamps[max_idx]], [max_price],
+            color='#FF6D00', s=35, zorder=5,
+            marker='^', linewidths=0
+        )
+        ax.scatter(
+            [timestamps[min_idx]], [min_price],
+            color='#1E88E5', s=35, zorder=5,
+            marker='v', linewidths=0
+        )
+        ax.annotate(
+            f"H ₹{max_price:,.0f}",
+            xy         = (timestamps[max_idx], max_price),
+            xytext     = (4, 8),
+            textcoords = 'offset points',
+            color      = '#FF6D00',
+            fontsize   = 7.5,
+        )
+        ax.annotate(
+            f"L ₹{min_price:,.0f}",
+            xy         = (timestamps[min_idx], min_price),
+            xytext     = (4, -14),
+            textcoords = 'offset points',
+            color      = '#1E88E5',
+            fontsize   = 7.5,
+        )
+
+        # ── % change badge ──
+        pct_change = ((prices[-1] - prices[0]) / prices[0]) * 100
+        badge_color = GREEN_COLOR if pct_change >= 0 else '#D50000'
+        ax.set_title(
+            f"{'▲' if pct_change >= 0 else '▼'} {abs(pct_change):.2f}%  "
+            f"over last {self.chart_range.get()}",
+            color    = badge_color,
+            fontsize = 11,
+            fontweight = 'bold',
+            loc      = 'right',
+            pad      = 8,
+        )
+
+        # ── Grid ──
+        ax.grid(
+            True,
+            color     = GRID_COLOR,
+            linewidth = 0.6,
+            linestyle = '--',
+            alpha     = 0.7,
+        )
+        ax.set_axisbelow(True)
+
+        # ── Spines ──
+        for spine in ax.spines.values():
+            spine.set_edgecolor(SPINE_COLOR)
+            spine.set_linewidth(0.8)
+
+        # ── Tick formatting ──
+        ax.tick_params(
+            colors    = TEXT_COLOR,
+            labelsize = 8,
+            length    = 3,
+            pad       = 4,
+        )
+
+        # X-axis date format based on range
+        if days == 1:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        elif days <= 7:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
+            ax.xaxis.set_major_locator(mdates.DayLocator())
+        else:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
+            ax.xaxis.set_major_locator(mdates.WeekdayLocator())
+
+        # Y-axis INR format
+        ax.yaxis.set_major_formatter(
+            matplotlib.ticker.FuncFormatter(
+                lambda x, _: f"₹{x:,.0f}"
             )
-            canvas.pack(fill='x', padx=16, pady=16)
+        )
 
-            # Separate real prices from gap markers
-            chart_data = []
-            for r in history:
-                if r.get('data_source') == 'gap_marker':
-                    chart_data.append(None)  # None = gap
-                elif r.get('price_24k'):
-                    chart_data.append(r['price_24k'])
+        # ── Y-axis padding ──
+        price_range = max_price - min_price
+        ax.set_ylim(
+            min_price - price_range * 0.08,
+            max_price + price_range * 0.12,
+        )
 
-            prices = [p for p in chart_data if p is not None]
-            if not prices:
-                return
+        fig.autofmt_xdate(rotation=0, ha='center')
 
-            W = 900
-            H = 240
-            pad_l, pad_r, pad_t, pad_b = 60, 20, 20, 40
+        # ── Embed in CustomTkinter ──
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+        canvas.draw()
+        canvas.get_tk_widget().pack(
+            fill='both', expand=True,
+            padx=8, pady=8
+        )
 
-            min_p = min(prices)
-            max_p = max(prices)
-            price_range = max_p - min_p or 1
-
-            def x_pos(i):
-                return pad_l + (i / (len(prices)-1)) * (W - pad_l - pad_r)
-
-            def y_pos(price):
-                return pad_t + (1 - (price - min_p) / price_range) * (H - pad_t - pad_b)
-
-            # Grid lines
-            for i in range(5):
-                y = pad_t + i * (H - pad_t - pad_b) / 4
-                price_at = max_p - i * price_range / 4
-                canvas.create_line(pad_l, y, W-pad_r, y, fill='#333333', dash=(4,4))
-                canvas.create_text(pad_l-4, y, text=f"₹{price_at:,.0f}",
-                    anchor='e', fill='#888888', font=('Arial', 9))
-
-            # Price line
-            points = []
-            for i, price in enumerate(prices):
-                points.extend([x_pos(i), y_pos(price)])
-
-            # Draw line segments, skipping gaps
-            segment_points = []
-            for i, price in enumerate(chart_data):
-                if price is None:
-                    # Gap — draw current segment and start new one
-                    if len(segment_points) >= 4:
-                        canvas.create_line(
-                            segment_points, fill=GOLD,
-                            width=2, smooth=True
-                        )
-                    segment_points = []
-                    # Draw vertical gap indicator
-                    x = x_pos(i)
-                    canvas.create_line(
-                        x, pad_t, x, H - pad_b,
-                        fill='#444444', dash=(3, 3), width=1
-                    )
-                else:
-                    segment_points.extend([x_pos(i), y_pos(price)])
-
-            # Draw final segment
-            if len(segment_points) >= 4:
-                canvas.create_line(
-                    segment_points, fill=GOLD,
-                    width=2, smooth=True
-                )
-
-            # Dots at first and last
-            x0, y0 = x_pos(0), y_pos(prices[0])
-            x1, y1 = x_pos(len(prices)-1), y_pos(prices[-1])
-            canvas.create_oval(x0-4, y0-4, x0+4, y0+4, fill=GOLD, outline='')
-            canvas.create_oval(x1-4, y1-4, x1+4, y1+4, fill=GREEN, outline='')
-
-            # Labels
-            canvas.create_text(x0, y0-12,
-                text=f"₹{prices[0]:,.0f}", fill=SUBTEXT, font=('Arial', 9))
-            canvas.create_text(x1, y1-12,
-                text=f"₹{prices[-1]:,.0f}", fill=GREEN, font=('Arial', 9))
-
-        except Exception as e:
-            ctk.CTkLabel(self.chart_frame,
-                text=f'Chart error: {e}',
-                text_color=RED
-            ).pack(pady=20)
+        plt.close(fig)
 
 
     # =========================================================================
@@ -1110,7 +1226,8 @@ class Dashboard(ctk.CTk):
     def _cancel_alert(self, alert_id):
         from database.db_manager import cancel_alert
         cancel_alert(alert_id)
-        self._render_alert_history()
+        # Rebuild entire tab to refresh summary cards + list together
+        self._show_tab('alert_history')
 
     def _add_purchase(self):
         try:
@@ -1283,7 +1400,7 @@ class Dashboard(ctk.CTk):
 
         # Rows (most recent first)
         for row_data in reversed(history[-50:]):
-            # Show gap markers differently
+            # Gap marker rows
             if row_data.get('data_source') == 'gap_marker':
                 gap_row = ctk.CTkFrame(p, fg_color='#1a1a1a', corner_radius=8)
                 gap_row.pack(fill='x', padx=24, pady=2)
@@ -1293,6 +1410,29 @@ class Dashboard(ctk.CTk):
                     text_color='#555555'
                 ).pack(side='left', padx=8, pady=6)
                 continue
+
+            # Skip rows with no price data
+            if not row_data.get('price_24k'):
+                continue
+
+            row = ctk.CTkFrame(p, fg_color=CARD, corner_radius=8)
+            row.pack(fill='x', padx=24, pady=2)
+
+            ts    = str(row_data.get('timestamp', ''))[:16]
+            p24   = format_inr(row_data.get('price_24k'))
+            p22   = format_inr(row_data.get('price_22k'))
+            ret   = format_inr_short(row_data.get('retail_price'))
+            score = row_data.get('buy_score') or 0
+            sig   = get_buy_label(score)
+
+            values = [ts, p24, p22, ret, f"{score}/100", sig]
+            colors = [SUBTEXT, TEXT, TEXT, GOLD, SUBTEXT, get_score_color(score)]
+
+            for val, color, w in zip(values, colors, widths):
+                ctk.CTkLabel(row, text=val,
+                    font=ctk.CTkFont(size=11),
+                    text_color=color, width=w, anchor='w'
+                ).pack(side='left', padx=8, pady=7)
 
             ts    = str(row_data.get('timestamp', ''))[:16]
             p24   = format_inr(row_data.get('price_24k'))
@@ -1354,7 +1494,7 @@ class Dashboard(ctk.CTk):
         self.theme_var = ctk.StringVar(value=get_setting('theme') or 'dark')
         theme_menu = ctk.CTkOptionMenu(
             theme_row,
-            values=['dark', 'light'],
+            values=['dark'],
             variable=self.theme_var,
             fg_color=CARD2, button_color=GOLD_DARK,
             width=180
