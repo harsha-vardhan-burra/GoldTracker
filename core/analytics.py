@@ -157,6 +157,12 @@ class AnalyticsResult:
     trend_adx:       float = 0.0
     trend_label:     str   = ""
     trend_direction: str   = "neutral"
+    support:          Optional[float] = None
+    resistance:       Optional[float] = None
+    nearest_support:  Optional[float] = None
+    nearest_resist:   Optional[float] = None
+    at_support:       bool  = False
+    at_resistance:    bool  = False
 
     def to_dict(self) -> dict:
         """Serialise to a plain dict (for backward-compat with callers)."""
@@ -178,6 +184,12 @@ class AnalyticsResult:
             "trend_adx":       self.trend_adx,
             "trend_label":     self.trend_label,
             "trend_direction": self.trend_direction,
+            "support":         self.support,
+            "resistance":      self.resistance,
+            "nearest_support": self.nearest_support,
+            "nearest_resist":  self.nearest_resist,
+            "at_support":      self.at_support,
+            "at_resistance":   self.at_resistance,
         }
 
 
@@ -473,6 +485,171 @@ def score_trend_strength(
         reasoning = reasoning,
     )
 
+# ---------------------------------------------------------------------------
+# ── SUPPORT / RESISTANCE LEVELS ────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+# Minimum prices needed for meaningful S/R calculation
+_SR_MIN_PRICES    = 20
+
+# Price bin width in INR — clusters prices into zones
+_SR_BIN_WIDTH     = 50.0
+
+# How close current price must be to a level to be "near" it (%)
+_SR_PROXIMITY_PCT = 0.8
+
+
+@dataclass
+class SupportResistanceResult:
+    """Output of support/resistance calculation."""
+    support:          Optional[float]
+    resistance:       Optional[float]
+    nearest_support:  Optional[float]
+    nearest_resist:   Optional[float]
+    at_support:       bool
+    at_resistance:    bool
+    modifier:         int
+    reasoning:        str
+
+
+def compute_support_resistance(
+    prices: list[float],
+    current_price: float,
+) -> SupportResistanceResult:
+    """
+    Identify support and resistance levels using price clustering.
+
+    Algorithm:
+    1. Bin all historical prices into ₹50 ranges
+    2. Find bins with highest visit frequency (strong zones)
+    3. Classify zones below current price as support,
+       above as resistance
+    4. Apply score modifier based on proximity to levels
+
+    Parameters
+    ----------
+    prices        : historical prices, oldest first
+    current_price : current 24K spot price
+
+    Returns
+    -------
+    SupportResistanceResult
+    """
+    _EMPTY = SupportResistanceResult(
+        support         = None,
+        resistance      = None,
+        nearest_support = None,
+        nearest_resist  = None,
+        at_support      = False,
+        at_resistance   = False,
+        modifier        = 0,
+        reasoning       = "insufficient data for support/resistance",
+    )
+
+    if len(prices) < _SR_MIN_PRICES or not current_price:
+        return _EMPTY
+
+    # ── Step 1: Build frequency map ───────────────────────────────────────
+    # Map each price to its bin floor: e.g. ₹13,762 → ₹13,750 bin
+    bin_counts: dict[float, int] = {}
+    for price in prices:
+        bin_floor = round(price / _SR_BIN_WIDTH) * _SR_BIN_WIDTH
+        bin_counts[bin_floor] = bin_counts.get(bin_floor, 0) + 1
+
+    if not bin_counts:
+        return _EMPTY
+
+    # ── Step 2: Find significant zones ───────────────────────────────────
+    # Zones visited more than average are significant
+    avg_visits   = sum(bin_counts.values()) / len(bin_counts)
+    min_visits   = max(2, avg_visits * 0.8)   # at least 80% of avg
+
+    significant  = sorted(
+        [price for price, count in bin_counts.items() if count >= min_visits]
+    )
+
+    if not significant:
+        return _EMPTY
+
+    # ── Step 3: Classify into support and resistance ──────────────────────
+    support_levels    = [p for p in significant if p <= current_price]
+    resistance_levels = [p for p in significant if p >  current_price]
+
+    nearest_support = max(support_levels)    if support_levels    else None
+    nearest_resist  = min(resistance_levels) if resistance_levels else None
+
+    # Overall strongest levels (most visited)
+    strongest_support = max(
+        support_levels,
+        key=lambda p: bin_counts.get(p, 0)
+    ) if support_levels else None
+
+    strongest_resist = max(
+        resistance_levels,
+        key=lambda p: bin_counts.get(p, 0)
+    ) if resistance_levels else None
+
+    # ── Step 4: Proximity check ───────────────────────────────────────────
+    prox_threshold = current_price * (_SR_PROXIMITY_PCT / 100)
+
+    at_support = (
+        nearest_support is not None
+        and abs(current_price - nearest_support) <= prox_threshold
+    )
+    at_resistance = (
+        nearest_resist is not None
+        and abs(current_price - nearest_resist) <= prox_threshold
+    )
+
+    # ── Step 5: Score modifier ────────────────────────────────────────────
+    if at_support:
+        modifier = +6    # price at support → good buy opportunity
+    elif at_resistance:
+        modifier = -6    # price at resistance → caution for buyers
+    elif nearest_support and nearest_resist:
+        # Position within range
+        range_size = nearest_resist - nearest_support
+        if range_size > 0:
+            position = (current_price - nearest_support) / range_size
+            # Lower in range → more bullish for buyers
+            modifier = round((0.5 - position) * 8)
+        else:
+            modifier = 0
+    else:
+        modifier = 0
+
+    # ── Step 6: Build reasoning ───────────────────────────────────────────
+    parts: list[str] = []
+
+    if at_support and nearest_support:
+        parts.append(
+            f"price near support at ₹{nearest_support:,.0f} — "
+            f"historically a buy zone"
+        )
+    elif at_resistance and nearest_resist:
+        parts.append(
+            f"price near resistance at ₹{nearest_resist:,.0f} — "
+            f"historically a sell zone"
+        )
+    else:
+        if nearest_support:
+            parts.append(f"support at ₹{nearest_support:,.0f}")
+        if nearest_resist:
+            parts.append(f"resistance at ₹{nearest_resist:,.0f}")
+
+    reasoning = " · ".join(parts) if parts else "no clear S/R levels detected"
+
+    return SupportResistanceResult(
+        support         = strongest_support,
+        resistance      = strongest_resist,
+        nearest_support = nearest_support,
+        nearest_resist  = nearest_resist,
+        at_support      = at_support,
+        at_resistance   = at_resistance,
+        modifier        = modifier,
+        reasoning       = reasoning,
+    )
+
 def compute_premium_history(history: list[dict]) -> list[float]:
     """
     For each history row where both spot and retail prices exist,
@@ -743,13 +920,17 @@ def run_analytics(
     # ── 5. Retail-premium divergence modifier ─────────────────────────────
     premium = score_retail_divergence(current_price, retail_price, premium_history)
 
+# ── 5b. Support / Resistance ──────────────────────────────────────────
+    sr = compute_support_resistance(prices, current_price)
+
     # ── 6. Assemble score ─────────────────────────────────────────────────
     raw_score  = sig1.score + sig2.score + sig3.score + sig4.score
-    buy_score  = max(0, min(100,
+    buy_score = max(0, min(100,
         raw_score
         + time_ctx.modifier
         + premium.modifier
-        + trend.modifier          # ← add this
+        + trend.modifier
+        + sr.modifier             
     ))
     sell_score = 100 - buy_score
 
@@ -767,6 +948,8 @@ def run_analytics(
         reasons.append(premium.reason)
     if trend.reasoning and "unavailable" not in trend.reasoning:
         reasons.append(trend.reasoning)
+    if sr.reasoning and "insufficient" not in sr.reasoning:
+        reasons.append(sr.reasoning)
 
     explanation = build_explanation(reasons)
 
@@ -795,6 +978,12 @@ def run_analytics(
         trend_adx      = trend.adx,
         trend_label    = trend.label,
         trend_direction= trend.direction,
+        support          = sr.support,
+        resistance       = sr.resistance,
+        nearest_support  = sr.nearest_support,
+        nearest_resist   = sr.nearest_resist,
+        at_support       = sr.at_support,
+        at_resistance    = sr.at_resistance,
     )
 
 
@@ -828,4 +1017,10 @@ if __name__ == "__main__":
     print(f"{'Trend ADX':<20}: {result.trend_adx}")
     print(f"{'Trend Label':<20}: {result.trend_label}")
     print(f"{'Trend Direction':<20}: {result.trend_direction}")
+    print(f"{'Support':<20}: ₹{result.support:,.0f}" if result.support else f"{'Support':<20}: building...")
+    print(f"{'Resistance':<20}: ₹{result.resistance:,.0f}" if result.resistance else f"{'Resistance':<20}: building...")
+    print(f"{'Nearest Support':<20}: ₹{result.nearest_support:,.0f}" if result.nearest_support else f"{'Nearest Support':<20}: ---")
+    print(f"{'Nearest Resist':<20}: ₹{result.nearest_resist:,.0f}" if result.nearest_resist else f"{'Nearest Resist':<20}: ---")
+    print(f"{'At Support':<20}: {result.at_support}")
+    print(f"{'At Resistance':<20}: {result.at_resistance}")
     print("=" * WIDTH)
