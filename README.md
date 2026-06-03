@@ -26,6 +26,10 @@ silent system tray integration.
 - 📊 **Weekly Summary** — Sunday morning digest of the week's gold performance
 - 🛡️ **Anomaly Detection** — validates every reading, rejects bad data automatically
 - 🔍 **Data Quality Score** — live confidence indicator on dashboard
+- ⏰ **Time-of-Day Awareness** — MCX and US market session detection adjusts signal confidence
+- 📅 **Day-of-Week Patterns** — historical weekday behaviour factored into signals
+- 🎯 **Support/Resistance Levels** — price clustering identifies historical buy/sell zones
+- 📈 **Trend Strength (ADX)** — Wilder-smoothed ADX measures trend conviction
 
 ---
 
@@ -62,6 +66,7 @@ silent system tray integration.
 | Database | SQLite3 |
 | HTTP | requests |
 | Scraping | BeautifulSoup4 + lxml |
+| Charts | matplotlib |
 | Scheduling | Python threading |
 | Notifications | plyer + winsound |
 | System Tray | pystray |
@@ -139,14 +144,18 @@ GoldTracker/
 
 ## How the Buy/Sell Signal Works
 
-The scoring engine analyses 4 signals every cycle:
+The scoring engine combines 8 independent signals every cycle:
 
-| Signal | Weight | What it measures |
+| Signal | Points | What it measures |
 |--------|--------|-----------------|
-| Price vs 7-day MA | 30pts | Short-term deviation from average |
-| Price vs 30-day MA | 30pts | Medium-term deviation from average |
-| Momentum | 25pts | Trend direction and speed |
-| Volatility | 15pts | How reliable the signal is |
+| Price vs 7-day MA | 0–30pts | Short-term deviation from average |
+| Price vs 30-day MA | 0–30pts | Medium-term deviation from average |
+| Momentum | 0–25pts | Trend direction and speed |
+| Volatility | 0–15pts | How reliable the signal is |
+| Time-of-day modifier | ±13pts | MCX/US session and transition windows |
+| Retail premium modifier | ±10pts | Retail vs spot divergence from 30-day norm |
+| Trend strength (ADX) | ±5pts | Wilder-smoothed ADX conviction score |
+| Support/resistance | ±6pts | Price proximity to historical price zones |
 
 Score → Label mapping:
 
@@ -157,8 +166,9 @@ Score → Label mapping:
 | 35–54 | Wait a bit more | Hold for now |
 | 0–34 | Bad time to buy | Perfect time to sell |
 
-> Signals become meaningfully accurate after 7–30 days of continuous data collection.
-> News sentiment is also factored into the explanation string each cycle.
+> Signals become meaningfully accurate after 7–30 days of data collection.
+> Support/resistance levels populate after sufficient price history (20+ readings).
+> ADX requires 28+ data points for a meaningful calculation.
 
 ---
 
