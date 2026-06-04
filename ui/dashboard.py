@@ -91,6 +91,53 @@ class Dashboard(ctk.CTk):
         sync_startup_setting(enabled)
         update_setting('startup_enabled', 'true' if enabled else 'false')
 
+    def _make_toggle_row(self, parent, title: str, subtitle: str, setting_key: str) -> None:
+        """Creates a toggle row that saves instantly on change."""
+        row = self._settings_row(parent, title, subtitle)
+        var = ctk.StringVar(value=get_setting(setting_key) or 'on')
+        switch = ctk.CTkSwitch(
+            row, text='',
+            variable=var,
+            onvalue='on', offvalue='off',
+            progress_color=GOLD_DARK,
+            command=lambda: update_setting(setting_key, var.get())
+        )
+        switch.pack(side='right', padx=16)
+        if (get_setting(setting_key) or 'on') == 'on':
+            switch.select()
+
+    def _toggle_startup(self) -> None:
+        enabled = not is_startup_enabled()
+        sync_startup_setting(enabled)
+        update_setting('startup_enabled', 'true' if enabled else 'false')
+
+    def _save_gnews_key(self) -> None:
+        key = self.gnews_key_entry.get().strip()
+        if not key:
+            self.gnews_save_msg.configure(text='Empty!', text_color=RED)
+            return
+        try:
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = _json.load(f)
+            cfg['gnews_api_key'] = key
+            with open(SETTINGS_PATH, 'w') as f:
+                _json.dump(cfg, f, indent=4)
+            self.gnews_save_msg.configure(text='✓ Saved', text_color=GREEN)
+        except Exception as e:
+            self.gnews_save_msg.configure(text='Failed', text_color=RED)
+
+    def _save_goldapi_key(self) -> None:
+        key = self.goldapi_key_entry.get().strip()
+        try:
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = _json.load(f)
+            cfg['goldapi_key'] = key
+            with open(SETTINGS_PATH, 'w') as f:
+                _json.dump(cfg, f, indent=4)
+            self.goldapi_save_msg.configure(text='✓ Saved', text_color=GREEN)
+        except Exception as e:
+            self.goldapi_save_msg.configure(text='Failed', text_color=RED)
+
     # ─── LAYOUT ──────────────────────────────────────────────────────────────
     def _build_layout(self):
         # Sidebar
@@ -1467,7 +1514,7 @@ class Dashboard(ctk.CTk):
     # =========================================================================
     # TAB 5 — SETTINGS
     # =========================================================================
-    def _build_settings_tab(self):
+    def _build_settings_tab(self) -> None:
         p = self.content_frame
 
         ctk.CTkLabel(p, text='Settings',
@@ -1478,175 +1525,176 @@ class Dashboard(ctk.CTk):
         self._settings_section(p, 'DATA SETTINGS')
 
         city_row = self._settings_row(p, 'City', 'Gold rate city for retail pricing')
-        self.city_var = ctk.StringVar(value=get_setting('city') or 'vijayawada')
-        city_menu = ctk.CTkOptionMenu(
+        self.city_var = ctk.StringVar(value=get_setting('city') or 'hyderabad')
+        ctk.CTkOptionMenu(
             city_row,
-            values=['vijayawada', 'hyderabad', 'chennai', 'mumbai',
+            values=['hyderabad', 'vijayawada', 'chennai', 'mumbai',
                     'delhi', 'bangalore', 'kolkata', 'pune'],
             variable=self.city_var,
             fg_color=CARD2, button_color=GOLD_DARK,
-            width=180
-        )
-        city_menu.pack(side='right')
+            width=180,
+            command=lambda v: update_setting('city', v)   # saves instantly
+        ).pack(side='right', padx=16)
 
-        poll_row = self._settings_row(p, 'Polling Interval', 'How often to fetch new price')
+        poll_row = self._settings_row(p, 'Polling Interval', 'How often to fetch new price (minutes)')
         self.poll_var = ctk.StringVar(value=get_setting('polling_interval') or '5')
-        poll_menu = ctk.CTkOptionMenu(
+        ctk.CTkOptionMenu(
             poll_row,
             values=['1', '2', '5', '10', '15', '30'],
             variable=self.poll_var,
             fg_color=CARD2, button_color=GOLD_DARK,
-            width=180
-        )
-        poll_menu.pack(side='right')
-
-        # ── API Keys ──
-        self._settings_section(p, 'API KEYS')
-
-        gnews_row = self._settings_row(p, 'GNews API Key', 'Required for market news features')
-        self.gnews_key_entry = ctk.CTkEntry(
-            gnews_row,
-            placeholder_text='Enter your GNews API key',
-            width=320, height=36,
-            show='*'        # masks the key like a password
-        )
-        # Load existing key
-        try:
-            import json
-            with open(SETTINGS_PATH, 'r') as f:
-                cfg = json.load(f)
-                existing = cfg.get('gnews_api_key', '')
-                if existing:
-                    self.gnews_key_entry.insert(0, existing)
-        except Exception:
-            pass
-        self.gnews_key_entry.pack(side='right', padx=16)
-
-        goldapi_row = self._settings_row(p, 'GoldAPI Key', 'Optional — used as fallback spot price source')
-        self.goldapi_key_entry = ctk.CTkEntry(
-            goldapi_row,
-            placeholder_text='Enter your GoldAPI.io key (optional)',
-            width=320, height=36,
-            show='*'
-        )
-        # Load existing key
-        try:
-            import json
-            with open(SETTINGS_PATH, 'r') as f:
-                cfg = json.load(f)
-                existing = cfg.get('goldapi_key', '')
-                if existing:
-                    self.goldapi_key_entry.insert(0, existing)
-        except Exception:
-            pass
-        self.goldapi_key_entry.pack(side='right', padx=16)
+            width=180,
+            command=lambda v: update_setting('polling_interval', v)  # saves instantly
+        ).pack(side='right', padx=16)
 
         # ── Appearance ──
         self._settings_section(p, 'APPEARANCE')
 
         theme_row = self._settings_row(p, 'Theme', 'App color theme')
         self.theme_var = ctk.StringVar(value=get_setting('theme') or 'dark')
-        theme_menu = ctk.CTkOptionMenu(
+        ctk.CTkOptionMenu(
             theme_row,
             values=['dark'],
             variable=self.theme_var,
             fg_color=CARD2, button_color=GOLD_DARK,
-            width=180
-        )
-        theme_menu.pack(side='right')
+            width=180,
+            command=lambda v: (update_setting('theme', v), ctk.set_appearance_mode(v))
+        ).pack(side='right', padx=16)
 
-        # ── Sound ──
+        # ── Notifications ──
         self._settings_section(p, 'NOTIFICATIONS')
 
-        sound_row = self._settings_row(p, 'Alert Sound', 'Play sound when a price alert is triggered')
-        self.sound_var = ctk.StringVar(
-            value=get_setting('sound_enabled') or 'on'
-        )
-        ctk.CTkSwitch(
-            sound_row,
-            text='',
-            variable=self.sound_var,
-            onvalue='on',
-            offvalue='off',
-            progress_color=GOLD_DARK,
-            command=self._toggle_sound
-        ).pack(side='right', padx=16)
+        self._make_toggle_row(p, 'Alert Sound',
+            'Play sound when a price alert is triggered',
+            'sound_enabled')
 
-        spike_row = self._settings_row(p, 'Spike Alerts', 'Notify when price moves more than 2% suddenly')
-        self.spike_var = ctk.StringVar(
-            value=get_setting('spike_alerts_enabled') or 'on'
-        )
-        ctk.CTkSwitch(
-            spike_row,
-            text='',
-            variable=self.spike_var,
-            onvalue='on',
-            offvalue='off',
-            progress_color=GOLD_DARK,
-            command=self._toggle_spike
-        ).pack(side='right', padx=16)
+        self._make_toggle_row(p, 'Spike Alerts',
+            'Notify when price moves more than 5% suddenly',
+            'spike_alerts_enabled')
 
-        summary_row = self._settings_row(p, 'Weekly Summary', 'Sunday morning gold performance digest')
-        self.summary_var = ctk.StringVar(
-            value=get_setting('weekly_summary_enabled') or 'on'
-        )
-        ctk.CTkSwitch(
-            summary_row,
-            text='',
-            variable=self.summary_var,
-            onvalue='on',
-            offvalue='off',
-            progress_color=GOLD_DARK,
-            command=self._toggle_summary
-        ).pack(side='right', padx=16)
+        self._make_toggle_row(p, 'Weekly Summary',
+            'Sunday morning gold performance digest',
+            'weekly_summary_enabled')
 
-        news_row = self._settings_row(p, 'News Correlation', 'Show gold market news context in signals')
-        self.news_var = ctk.StringVar(
-            value=get_setting('news_enabled') or 'on'
-        )
-        ctk.CTkSwitch(
-            news_row,
-            text='',
-            variable=self.news_var,
-            onvalue='on',
-            offvalue='off',
-            progress_color=GOLD_DARK,
-            command=self._toggle_news
-        ).pack(side='right', padx=16)
+        self._make_toggle_row(p, 'News Correlation',
+            'Show gold market news context in signals',
+            'news_enabled')
 
-        # ── Save button ──
-        ctk.CTkButton(
-            p,
-            text='Save Settings',
-            fg_color=GOLD_DARK,
-            hover_color=GOLD,
-            text_color='black',
-            font=ctk.CTkFont(size=13, weight='bold'),
-            height=42,
-            command=self._save_settings
-        ).pack(padx=24, pady=24, anchor='w')
-
-        self.settings_msg = ctk.CTkLabel(p, text='',
-            font=ctk.CTkFont(size=12), text_color=GREEN)
-        self.settings_msg.pack(anchor='w', padx=24)
-
-        # ── Startup ──
+        # ── System ──
         self._settings_section(p, 'SYSTEM')
 
-        startup_row = self._settings_row(p, 'Launch on Startup', 'Open GoldTracker when Windows starts')
-        self.startup_var = ctk.StringVar(
-            value='on' if is_startup_enabled() else 'off'
+        startup_row = self._settings_row(p, 'Launch on Startup',
+            'Open GoldTracker when Windows starts')
+        startup_switch = ctk.CTkSwitch(
+            startup_row, text='',
+            onvalue='on', offvalue='off',
+            progress_color=GOLD_DARK,
+            command=self._toggle_startup
         )
-        ctk.CTkSwitch(
-            startup_row,
-            text='',
-            variable=self.startup_var,
-            onvalue='on',
-            offvalue='off',
-            command=self._toggle_startup,
-            progress_color=GOLD_DARK
-        ).pack(side='right', padx=16)
+        startup_switch.pack(side='right', padx=16)
+        if is_startup_enabled():
+            startup_switch.select()
 
+        # ── API Keys ──
+        self._settings_section(p, 'API KEYS')
+
+        # GNews key
+        gnews_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=10)
+        gnews_frame.pack(fill='x', padx=24, pady=4)
+
+        ctk.CTkLabel(gnews_frame, text='GNews API Key',
+            font=ctk.CTkFont(size=13, weight='bold'), text_color=TEXT
+        ).pack(anchor='w', padx=16, pady=(12, 2))
+
+        ctk.CTkLabel(gnews_frame,
+            text='Required for market news  |  Get free key at gnews.io',
+            font=ctk.CTkFont(size=10), text_color=SUBTEXT
+        ).pack(anchor='w', padx=16)
+
+        ctk.CTkLabel(gnews_frame,
+            text='⚠️  You must verify your email on gnews.io before the key works',
+            font=ctk.CTkFont(size=10), text_color=ORANGE
+        ).pack(anchor='w', padx=16, pady=(2, 6))
+
+        gnews_input_row = ctk.CTkFrame(gnews_frame, fg_color='transparent')
+        gnews_input_row.pack(fill='x', padx=16, pady=(0, 14))
+
+        self.gnews_key_entry = ctk.CTkEntry(
+            gnews_input_row,
+            placeholder_text='Enter your GNews API key',
+            height=36, show='*'
+        )
+        self.gnews_key_entry.pack(side='left', fill='x', expand=True, padx=(0, 10))
+
+        try:
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = _json.load(f)
+                existing = cfg.get('gnews_api_key', '')
+                if existing:
+                    self.gnews_key_entry.insert(0, existing)
+        except Exception:
+            pass
+
+        self.gnews_save_msg = ctk.CTkLabel(gnews_input_row, text='',
+            font=ctk.CTkFont(size=11), text_color=GREEN, width=60)
+        self.gnews_save_msg.pack(side='right', padx=(0, 10))
+
+        ctk.CTkButton(
+            gnews_input_row,
+            text='Save',
+            fg_color=GOLD_DARK, hover_color=GOLD,
+            text_color='black',
+            font=ctk.CTkFont(weight='bold'),
+            width=80, height=36,
+            command=self._save_gnews_key
+        ).pack(side='right')
+
+        # GoldAPI key
+        goldapi_frame = ctk.CTkFrame(p, fg_color=CARD, corner_radius=10)
+        goldapi_frame.pack(fill='x', padx=24, pady=4)
+
+        ctk.CTkLabel(goldapi_frame, text='GoldAPI Key',
+            font=ctk.CTkFont(size=13, weight='bold'), text_color=TEXT
+        ).pack(anchor='w', padx=16, pady=(12, 2))
+
+        ctk.CTkLabel(goldapi_frame,
+            text='Optional — fallback spot price source  |  goldapi.io (100 req/month free)',
+            font=ctk.CTkFont(size=10), text_color=SUBTEXT
+        ).pack(anchor='w', padx=16, pady=(0, 6))
+
+        goldapi_input_row = ctk.CTkFrame(goldapi_frame, fg_color='transparent')
+        goldapi_input_row.pack(fill='x', padx=16, pady=(0, 14))
+
+        self.goldapi_key_entry = ctk.CTkEntry(
+            goldapi_input_row,
+            placeholder_text='Enter your GoldAPI.io key (optional)',
+            height=36, show='*'
+        )
+        self.goldapi_key_entry.pack(side='left', fill='x', expand=True, padx=(0, 10))
+
+        try:
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = _json.load(f)
+                existing = cfg.get('goldapi_key', '')
+                if existing:
+                    self.goldapi_key_entry.insert(0, existing)
+        except Exception:
+            pass
+
+        self.goldapi_save_msg = ctk.CTkLabel(goldapi_input_row, text='',
+            font=ctk.CTkFont(size=11), text_color=GREEN, width=60)
+        self.goldapi_save_msg.pack(side='right', padx=(0, 10))
+
+        ctk.CTkButton(
+            goldapi_input_row,
+            text='Save',
+            fg_color=GOLD_DARK, hover_color=GOLD,
+            text_color='black',
+            font=ctk.CTkFont(weight='bold'),
+            width=80, height=36,
+            command=self._save_goldapi_key
+        ).pack(side='right')
+    
     def _settings_section(self, parent, title):
         ctk.CTkLabel(parent, text=title,
             font=ctk.CTkFont(size=11, weight='bold'), text_color=GOLD
@@ -1666,40 +1714,6 @@ class Dashboard(ctk.CTk):
         ).pack(side='left', padx=4)
 
         return row
-
-
-    def _save_settings(self):
-        update_setting('city',                   self.city_var.get())
-        update_setting('polling_interval',        self.poll_var.get())
-        update_setting('theme',                   self.theme_var.get())
-        ctk.set_appearance_mode(self.theme_var.get())
-
-        # Save API keys to settings.json
-        try:
-            with open(SETTINGS_PATH, 'r') as f:
-                cfg = _json.load(f)
-
-            gnews_key  = self.gnews_key_entry.get().strip()
-            goldapi_key = self.goldapi_key_entry.get().strip()
-
-            if gnews_key:
-                cfg['gnews_api_key'] = gnews_key
-            if goldapi_key:
-                cfg['goldapi_key'] = goldapi_key
-
-            with open(SETTINGS_PATH, 'w') as f:
-                _json.dump(cfg, f, indent=4)
-
-            self.settings_msg.configure(
-                text='✓ Settings saved successfully',
-                text_color=GREEN
-            )
-        except Exception as e:
-            self.settings_msg.configure(
-                text=f'Settings saved (API key update failed: {e})',
-                text_color=ORANGE
-            )
-
 
     # =========================================================================
     # SCHEDULER + DATA FLOW
@@ -1741,21 +1755,19 @@ class Dashboard(ctk.CTk):
 
 
     def on_closing(self):
-        if self.scheduler:
-            self.scheduler.stop()
+        # Don't stop scheduler — keep running in tray
         self.destroy()
-
-    def _toggle_sound(self):
-        update_setting('sound_enabled', self.sound_var.get())
-
-    def _toggle_spike(self):
-        update_setting('spike_alerts_enabled', self.spike_var.get())
-
-    def _toggle_summary(self):
-        update_setting('weekly_summary_enabled', self.summary_var.get())
-
-    def _toggle_news(self):
-        update_setting('news_enabled', self.news_var.get())
+        # Show Windows notification telling user app is in tray
+        try:
+            from plyer import notification
+            notification.notify(
+                title    = 'GoldTracker is still running',
+                message  = 'Monitoring gold prices in the background.\nRight-click the tray icon to quit.',
+                app_name = 'GoldTracker',
+                timeout  = 4,
+            )
+        except Exception:
+            pass
 
 # ─── Run ─────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':

@@ -41,6 +41,14 @@ silent system tray integration.
 ### Startup Popup
 ![Popup](assets/screenshots/popup.png)
 
+### Alert History
+![AlertHistory](assets/screenshots/alert_history.png)
+
+### Charts
+![Charts](assets/screenshots/charts.png)
+
+### Portfolio
+![Portfolio](assets/screenshots/portfolio.png)
 ---
 
 ## Data Sources

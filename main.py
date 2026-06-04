@@ -1,6 +1,7 @@
 import sys
 import os
 import threading
+from utils.logger import logger
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
@@ -58,6 +59,7 @@ def _get_base_dir() -> str:
 def main():
     print('='*50)
     print('  GoldTracker Starting...')
+    logger.info('GoldTracker started')
     print('='*50)
 
     # Step 0 — Ensure directory structure exists
@@ -65,7 +67,11 @@ def main():
 
     # Step 1 — Initialize database
     print('[Main] Initializing database...')
-    initialize_database()
+    try:
+        initialize_database()
+        logger.info("Database initialized successfully")
+    except Exception:
+        logger.exception("Database initialization failed")
 
     # Step 2 — Sync startup registry
     startup_enabled = get_setting('startup_enabled')
@@ -99,7 +105,7 @@ def main():
     tray.start()  # blocks here until user quits
 
     print('[Main] GoldTracker exited cleanly.')
-
+    logger.info('GoldTracker exited')
 
 def _launch_popup(scheduler):
     try:

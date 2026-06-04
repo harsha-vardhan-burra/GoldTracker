@@ -138,10 +138,14 @@ def fetch_gold_news(query=None):
         return []
 
 
-def _load_news_api_key():
+def _load_news_api_key() -> str:
     try:
-        base_dir      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        settings_path = os.path.join(base_dir, 'config', 'settings.json')
+        import sys
+        if getattr(sys, 'frozen', False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        settings_path = os.path.join(base, 'config', 'settings.json')
         with open(settings_path, 'r') as f:
             data = json.load(f)
             return data.get('gnews_api_key', '')
