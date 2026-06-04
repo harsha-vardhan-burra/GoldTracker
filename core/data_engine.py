@@ -1,15 +1,23 @@
 import requests
 from bs4 import BeautifulSoup
 import json
-import os
 import sys
+import os
 
-# Add project root to path so we can import db_manager
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+def _project_root() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+sys.path.append(_project_root())
 from database.db_manager import get_setting
 
-# Load API key from settings.json
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def _get_base_dir() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+BASE_DIR      = _get_base_dir()
 SETTINGS_PATH = os.path.join(BASE_DIR, 'config', 'settings.json')
 
 def load_api_key():

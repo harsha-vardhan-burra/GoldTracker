@@ -28,9 +28,15 @@ from typing import Optional
 # In production the package is installed / PYTHONPATH is set externally.
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import os
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import os
+
+    def _project_root() -> str:
+        if getattr(sys, 'frozen', False):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    sys.path.append(_project_root())
 
 from database.db_manager import get_price_history
 

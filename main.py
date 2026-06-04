@@ -10,11 +10,58 @@ from utils.startup_manager import sync_startup_setting
 from core.scheduler        import GoldScheduler
 from ui.tray_icon          import GoldTrayIcon
 
+def ensure_directory_structure() -> None:
+    """
+    Creates required folders and default config on first run.
+    Works both in development and packaged .exe context.
+    """
+    import shutil
+
+    base = _get_base_dir()
+
+    # Folders that must exist
+    for folder in ('config', 'database', 'assets'):
+        path = os.path.join(base, folder)
+        os.makedirs(path, exist_ok=True)
+
+    # Create settings.json from example if missing
+    settings_path = os.path.join(base, 'config', 'settings.json')
+    example_path  = os.path.join(base, 'config', 'settings.example.json')
+
+    if not os.path.exists(settings_path):
+        if os.path.exists(example_path):
+            shutil.copy(example_path, settings_path)
+            print('[Setup] Created config/settings.json from example')
+        else:
+            # Create a minimal default settings.json from scratch
+            import json
+            defaults = {
+                "goldapi_key":              "",
+                "gnews_api_key":            "",
+                "city":                     "hyderabad",
+                "karat":                    "24",
+                "polling_interval_minutes": 5,
+                "startup_enabled":          True,
+                "theme":                    "dark",
+                "target_buy_price":         None,
+                "target_sell_price":        None
+            }
+            with open(settings_path, 'w') as f:
+                json.dump(defaults, f, indent=4)
+            print('[Setup] Created default config/settings.json')
+
+def _get_base_dir() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 def main():
     print('='*50)
     print('  GoldTracker Starting...')
     print('='*50)
+
+    # Step 0 — Ensure directory structure exists
+    ensure_directory_structure()
 
     # Step 1 — Initialize database
     print('[Main] Initializing database...')

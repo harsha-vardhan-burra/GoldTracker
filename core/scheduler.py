@@ -1,8 +1,14 @@
-import sys
-import os
 import time
 import threading
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sys
+import os
+
+def _project_root() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+sys.path.append(_project_root())
 
 try:
     # When imported from main.py (root context)

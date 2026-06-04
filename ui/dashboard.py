@@ -1,6 +1,7 @@
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.data_engine import SETTINGS_PATH
 from utils.startup_manager import is_startup_enabled, sync_startup_setting
 import customtkinter as ctk
 import threading
@@ -15,6 +16,18 @@ from core.scheduler import GoldScheduler
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('blue')
+
+import json as _json
+
+def _get_settings_path() -> str:
+    import sys
+    if getattr(sys, 'frozen', False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, 'config', 'settings.json')
+
+SETTINGS_PATH = _get_settings_path()
 
 # ─── COLORS ──────────────────────────────────────────────────────────────────
 GOLD      = '#FFD700'
@@ -1487,6 +1500,47 @@ class Dashboard(ctk.CTk):
         )
         poll_menu.pack(side='right')
 
+        # ── API Keys ──
+        self._settings_section(p, 'API KEYS')
+
+        gnews_row = self._settings_row(p, 'GNews API Key', 'Required for market news features')
+        self.gnews_key_entry = ctk.CTkEntry(
+            gnews_row,
+            placeholder_text='Enter your GNews API key',
+            width=320, height=36,
+            show='*'        # masks the key like a password
+        )
+        # Load existing key
+        try:
+            import json
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = json.load(f)
+                existing = cfg.get('gnews_api_key', '')
+                if existing:
+                    self.gnews_key_entry.insert(0, existing)
+        except Exception:
+            pass
+        self.gnews_key_entry.pack(side='right', padx=16)
+
+        goldapi_row = self._settings_row(p, 'GoldAPI Key', 'Optional — used as fallback spot price source')
+        self.goldapi_key_entry = ctk.CTkEntry(
+            goldapi_row,
+            placeholder_text='Enter your GoldAPI.io key (optional)',
+            width=320, height=36,
+            show='*'
+        )
+        # Load existing key
+        try:
+            import json
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = json.load(f)
+                existing = cfg.get('goldapi_key', '')
+                if existing:
+                    self.goldapi_key_entry.insert(0, existing)
+        except Exception:
+            pass
+        self.goldapi_key_entry.pack(side='right', padx=16)
+
         # ── Appearance ──
         self._settings_section(p, 'APPEARANCE')
 
@@ -1615,11 +1669,36 @@ class Dashboard(ctk.CTk):
 
 
     def _save_settings(self):
-        update_setting('city', self.city_var.get())
-        update_setting('polling_interval', self.poll_var.get())
-        update_setting('theme', self.theme_var.get())
+        update_setting('city',                   self.city_var.get())
+        update_setting('polling_interval',        self.poll_var.get())
+        update_setting('theme',                   self.theme_var.get())
         ctk.set_appearance_mode(self.theme_var.get())
-        self.settings_msg.configure(text='✓ Settings saved successfully')
+
+        # Save API keys to settings.json
+        try:
+            with open(SETTINGS_PATH, 'r') as f:
+                cfg = _json.load(f)
+
+            gnews_key  = self.gnews_key_entry.get().strip()
+            goldapi_key = self.goldapi_key_entry.get().strip()
+
+            if gnews_key:
+                cfg['gnews_api_key'] = gnews_key
+            if goldapi_key:
+                cfg['goldapi_key'] = goldapi_key
+
+            with open(SETTINGS_PATH, 'w') as f:
+                _json.dump(cfg, f, indent=4)
+
+            self.settings_msg.configure(
+                text='✓ Settings saved successfully',
+                text_color=GREEN
+            )
+        except Exception as e:
+            self.settings_msg.configure(
+                text=f'Settings saved (API key update failed: {e})',
+                text_color=ORANGE
+            )
 
 
     # =========================================================================

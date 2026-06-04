@@ -1,10 +1,24 @@
 import sqlite3
 import os
 import datetime
+import sys
 
-# Always store the database inside the project folder
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, 'database', 'goldtracker.db')
+def _get_base_dir() -> str:
+    """
+    Returns the correct base directory whether running as:
+    - Python script (development)
+    - PyInstaller .exe (production)
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as compiled .exe
+        # sys.executable = path to the .exe file
+        return os.path.dirname(sys.executable)
+    else:
+        # Running as Python script
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+BASE_DIR = _get_base_dir()
+DB_PATH  = os.path.join(BASE_DIR, 'database', 'goldtracker.db')
 
 
 def get_connection():

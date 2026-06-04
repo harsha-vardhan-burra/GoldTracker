@@ -1,6 +1,12 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def _project_root() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+sys.path.append(_project_root())
 
 from database.db_manager import get_latest_price, get_connection
 import datetime
