@@ -89,6 +89,15 @@ def run_cycle():
         data['sell_score']  = analytics['sell_score']
         data['explanation'] = analytics['explanation']
 
+        # Confidence, trend strength, and support/resistance were previously
+        # computed by run_analytics() but never carried past this point —
+        # they're needed downstream (DB storage + dashboard display).
+        data['confidence']       = analytics['confidence']
+        data['confidence_label'] = analytics['confidence_label']
+        data['trend_adx']        = analytics['trend_adx']
+        data['support']          = analytics['support']
+        data['resistance']       = analytics['resistance']
+
         # Step 5: Store in database
         insert_price(data)
         print(f"[Scheduler] Stored → 24K: ₹{data['price_24k']} | "

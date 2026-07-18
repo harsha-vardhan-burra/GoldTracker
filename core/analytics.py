@@ -170,6 +170,10 @@ class AnalyticsResult:
     at_support:       bool  = False
     at_resistance:    bool  = False
 
+    # Overall confidence in the current buy/sell score
+    confidence:       int = 0
+    confidence_label: str = ""
+
     def to_dict(self) -> dict:
         """Serialise to a plain dict (for backward-compat with callers)."""
         return {
@@ -196,6 +200,8 @@ class AnalyticsResult:
             "nearest_resist":  self.nearest_resist,
             "at_support":      self.at_support,
             "at_resistance":   self.at_resistance,
+            "confidence":       self.confidence,
+            "confidence_label": self.confidence_label,
         }
 
 
@@ -812,6 +818,65 @@ def build_explanation(reasons: list[str]) -> str:
     return " · ".join(meaningful)
 
 
+# Confidence label thresholds
+CONFIDENCE_LABEL_HIGH   = 75
+CONFIDENCE_LABEL_MEDIUM = 50
+
+
+def compute_confidence(
+    sig1:    SignalResult,
+    sig2:    SignalResult,
+    sig3:    SignalResult,
+    sig4:    SignalResult,
+    trend:   TrendStrengthResult,
+    premium: PremiumResult,
+    sr:      SupportResistanceResult,
+) -> tuple[int, str]:
+    """
+    Derive an overall confidence score (0-100) for the current buy/sell
+    score — how much the underlying data actually supports it, not how
+    extreme the score itself is.
+
+    Composition:
+      - Baseline 70, covering the four core signals (MA7/MA30/momentum/vol).
+      - -12 pts for each core signal that fell back to a neutral/insufficient
+        reading (via the same _NOISE_PHRASES used for the explanation text).
+      - + volatility's own reliability score (0-15; a calm market is a more
+        trustworthy signal than a choppy one).
+      - + up to 15 pts for a well-formed ADX trend reading (stronger trend
+        conviction = more reliable signal); 0 if ADX is unavailable.
+      - +5 pts each if retail-premium and support/resistance data were
+        actually available, since those are bonus modifiers, not always
+        present depending on history depth.
+    """
+    score = 70
+
+    core_reasons = [sig1.reason, sig2.reason, sig3.reason, sig4.reason]
+    missing_core = sum(1 for r in core_reasons if any(p in r for p in _NOISE_PHRASES))
+    score -= missing_core * 12
+
+    score += sig4.score  # volatility signal already scores reliability (0-15)
+
+    if trend.adx and "insufficient" not in trend.label:
+        score += min(trend.adx, 50) / 50 * 15
+
+    if premium.deviation_pct is not None:
+        score += 5
+    if sr.support is not None or sr.resistance is not None:
+        score += 5
+
+    score = max(0, min(100, round(score)))
+
+    if score >= CONFIDENCE_LABEL_HIGH:
+        label = "High"
+    elif score >= CONFIDENCE_LABEL_MEDIUM:
+        label = "Medium"
+    else:
+        label = "Low"
+
+    return score, label
+
+
 def get_buy_label(score: int) -> str:
     if score >= BUY_LABEL_GREAT:
         return "PERFECT TIME TO BUY"
@@ -959,6 +1024,11 @@ def run_analytics(
 
     explanation = build_explanation(reasons)
 
+    # ── 7b. Overall confidence in this score ──────────────────────────────
+    confidence, confidence_label = compute_confidence(
+        sig1, sig2, sig3, sig4, trend, premium, sr
+    )
+
     # ── 8. Return structured result ───────────────────────────────────────
     return AnalyticsResult(
         ma7           = ma7,
@@ -990,6 +1060,8 @@ def run_analytics(
         nearest_resist   = sr.nearest_resist,
         at_support       = sr.at_support,
         at_resistance    = sr.at_resistance,
+        confidence       = confidence,
+        confidence_label = confidence_label,
     )
 
 
@@ -1029,4 +1101,5 @@ if __name__ == "__main__":
     print(f"{'Nearest Resist':<20}: ₹{result.nearest_resist:,.0f}" if result.nearest_resist else f"{'Nearest Resist':<20}: ---")
     print(f"{'At Support':<20}: {result.at_support}")
     print(f"{'At Resistance':<20}: {result.at_resistance}")
+    print(f"{'Confidence':<20}: {result.confidence}/100 ({result.confidence_label})")
     print("=" * WIDTH)

@@ -129,6 +129,12 @@ def initialize_database():
     conn.close()
     print('Database initialized successfully at:', DB_PATH)
 
+    # Run column migrations for tables that predate these fields.
+    # Both are idempotent (check PRAGMA table_info before altering),
+    # so it's safe to call them unconditionally on every startup.
+    migrate_add_source_column()
+    migrate_add_analytics_columns()
+
 def migrate_add_source_column():
     """
     Adds data_source column to price_history if it doesn't exist.
@@ -153,6 +159,45 @@ def migrate_add_source_column():
 
     conn.close()
 
+
+def migrate_add_analytics_columns():
+    """
+    Adds confidence, trend, and support/resistance columns to price_history
+    if they don't already exist. Safe to run multiple times.
+
+    These were previously computed by analytics.run_analytics() but never
+    persisted past the in-memory scheduler cycle — every restart lost them.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(price_history)")
+    columns = [row['name'] for row in cursor.fetchall()]
+
+    new_columns = [
+        ('confidence',       'INTEGER'),
+        ('confidence_label', 'TEXT'),
+        ('trend_adx',        'REAL'),
+        ('support',          'REAL'),
+        ('resistance',       'REAL'),
+        ('data_quality',       'TEXT'),
+        ('data_quality_score', 'INTEGER'),
+    ]
+
+    added_any = False
+    for col_name, col_type in new_columns:
+        if col_name not in columns:
+            cursor.execute(f'ALTER TABLE price_history ADD COLUMN {col_name} {col_type}')
+            print(f'[Migration] Added {col_name} column to price_history')
+            added_any = True
+
+    if added_any:
+        conn.commit()
+    else:
+        print('[Migration] Analytics columns already exist — skipping')
+
+    conn.close()
+
 def insert_price(data: dict):
     conn = get_connection()
     cursor = conn.cursor()
@@ -161,14 +206,25 @@ def insert_price(data: dict):
             spot_usd, usd_inr, price_24k, price_22k, retail_price,
             ma7, ma30, momentum, volatility,
             buy_score, sell_score, explanation,
-            data_source
+            data_source,
+            confidence, confidence_label, trend_adx, support, resistance,
+            data_quality, data_quality_score
         ) VALUES (
             :spot_usd, :usd_inr, :price_24k, :price_22k, :retail_price,
             :ma7, :ma30, :momentum, :volatility,
             :buy_score, :sell_score, :explanation,
-            :data_source
+            :data_source,
+            :confidence, :confidence_label, :trend_adx, :support, :resistance,
+            :data_quality, :data_quality_score
         )
-    ''', data)
+    ''', {
+        **{
+            'confidence': None, 'confidence_label': None, 'trend_adx': None,
+            'support': None, 'resistance': None,
+            'data_quality': None, 'data_quality_score': None,
+        },
+        **data,
+    })
     conn.commit()
     conn.close()
 
@@ -198,10 +254,116 @@ def get_price_history(days=30):
     conn.close()
     return [dict(row) for row in rows]
 
+
+_WEEKDAY_NAMES = {
+    '0': 'Sunday',    '1': 'Monday',  '2': 'Tuesday', '3': 'Wednesday',
+    '4': 'Thursday',  '5': 'Friday',  '6': 'Saturday',
+}
+
+
+def get_historical_insights():
+    """
+    Answers the "useful even when you're not buying" questions:
+    lowest price this month, highest this year, average buying
+    opportunity, best day of week to buy, average monthly volatility.
+
+    Returns a dict; any stat with too little data to be meaningful
+    comes back as None so the UI can show "building..." instead of
+    a misleading number.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+
+    def _real_rows_filter(days):
+        return (
+            "price_24k IS NOT NULL AND price_24k > 0 "
+            "AND data_source != 'gap_marker' "
+            f"AND timestamp >= datetime('now', '-{days} days')"
+        )
+
+    result = {
+        'lowest_price_30d':     None,
+        'lowest_price_30d_at':  None,
+        'highest_price_365d':   None,
+        'highest_price_365d_at':None,
+        'avg_buy_score_30d':    None,
+        'best_buy_weekday':     None,
+        'best_buy_weekday_avg': None,
+        'avg_volatility_30d':   None,
+    }
+
+    # Lowest price — last 30 days
+    cursor.execute(f'''
+        SELECT price_24k, timestamp FROM price_history
+        WHERE {_real_rows_filter(30)}
+        ORDER BY price_24k ASC LIMIT 1
+    ''')
+    row = cursor.fetchone()
+    if row:
+        result['lowest_price_30d']    = row['price_24k']
+        result['lowest_price_30d_at'] = row['timestamp']
+
+    # Highest price — last 365 days
+    cursor.execute(f'''
+        SELECT price_24k, timestamp FROM price_history
+        WHERE {_real_rows_filter(365)}
+        ORDER BY price_24k DESC LIMIT 1
+    ''')
+    row = cursor.fetchone()
+    if row:
+        result['highest_price_365d']    = row['price_24k']
+        result['highest_price_365d_at'] = row['timestamp']
+
+    # Average buying opportunity — mean buy_score, last 30 days
+    cursor.execute('''
+        SELECT AVG(buy_score) as avg_score FROM price_history
+        WHERE buy_score IS NOT NULL
+        AND data_source != 'gap_marker'
+        AND timestamp >= datetime('now', '-30 days')
+    ''')
+    row = cursor.fetchone()
+    if row and row['avg_score'] is not None:
+        result['avg_buy_score_30d'] = round(row['avg_score'], 1)
+
+    # Best day of week to buy — highest average buy_score by weekday,
+    # using all history so the sample size is meaningful.
+    cursor.execute('''
+        SELECT strftime('%w', timestamp) as dow,
+               AVG(buy_score) as avg_score,
+               COUNT(*) as n
+        FROM price_history
+        WHERE buy_score IS NOT NULL
+        AND data_source != 'gap_marker'
+        GROUP BY dow
+        HAVING n >= 3
+        ORDER BY avg_score DESC
+        LIMIT 1
+    ''')
+    row = cursor.fetchone()
+    if row:
+        result['best_buy_weekday']     = _WEEKDAY_NAMES.get(row['dow'])
+        result['best_buy_weekday_avg'] = round(row['avg_score'], 1)
+
+    # Average volatility — last 30 days
+    cursor.execute('''
+        SELECT AVG(volatility) as avg_vol FROM price_history
+        WHERE volatility IS NOT NULL
+        AND data_source != 'gap_marker'
+        AND timestamp >= datetime('now', '-30 days')
+    ''')
+    row = cursor.fetchone()
+    if row and row['avg_vol'] is not None:
+        result['avg_volatility_30d'] = round(row['avg_vol'], 1)
+
+    conn.close()
+    return result
+
+
 def insert_gap_marker(gap_minutes):
     """
     Inserts a special row marking that the app was offline.
     Charts use this to draw breaks instead of false lines.
+
     """
     conn   = get_connection()
     cursor = conn.cursor()
