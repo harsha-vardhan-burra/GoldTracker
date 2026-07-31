@@ -1,0 +1,169 @@
+{
+  "timestamp": "2026-07-31T12:43:37.369236+00:00",
+  "scenarios": [
+    {
+      "scenario_name": "1. Stable Market",
+      "num_steps": 10,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.172,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "2. Gradual Bull Market",
+      "num_steps": 20,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.121,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "3. Gradual Bear Market",
+      "num_steps": 20,
+      "recommendation_stability_index": 0.9474,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.101,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "4. Sideways Oscillating Market",
+      "num_steps": 15,
+      "recommendation_stability_index": 0.8667,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.095,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "5. High Volatility Market",
+      "num_steps": 2,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.125,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "6. Low Liquidity / Frozen Market",
+      "num_steps": 1,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 0.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.088,
+      "pass_status": false,
+      "failure_reasons": [
+        "Overconfident in zero-volatility frozen market (92/100 Confidence)"
+      ]
+    },
+    {
+      "scenario_name": "7. Missing Data & History",
+      "num_steps": 2,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.055,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "8. Outlier Injection",
+      "num_steps": 2,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 0.83,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.089,
+      "pass_status": false,
+      "failure_reasons": [
+        "Outlier corrupted buy score by 17 pts (56 -> 73)"
+      ]
+    },
+    {
+      "scenario_name": "9. Session Boundary",
+      "num_steps": 1,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.084,
+      "pass_status": true,
+      "failure_reasons": []
+    },
+    {
+      "scenario_name": "10. Micro Price Changes & Continuity",
+      "num_steps": 30,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 0.25,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.093,
+      "pass_status": false,
+      "failure_reasons": [
+        "Detected 4 step discontinuities (>3 pts for \u20b90.25 shift). Max jump: 15 pts"
+      ]
+    },
+    {
+      "scenario_name": "11. Random Noise Stability",
+      "num_steps": 20,
+      "recommendation_stability_index": 0.6,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.094,
+      "pass_status": false,
+      "failure_reasons": [
+        "Random \u20b92 noise caused 8 recommendation label flips"
+      ]
+    },
+    {
+      "scenario_name": "12. Extreme Historical Trends",
+      "num_steps": 2,
+      "recommendation_stability_index": 1.0,
+      "score_continuity_index": 1.0,
+      "outlier_robustness_score": 1.0,
+      "confidence_calibration_score": 1.0,
+      "explanation_consistency_score": 1.0,
+      "conflict_resolution_accuracy": 1.0,
+      "avg_execution_time_ms": 0.112,
+      "pass_status": true,
+      "failure_reasons": []
+    }
+  ]
+}

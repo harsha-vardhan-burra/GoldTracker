@@ -58,18 +58,16 @@ def run_cycle():
             print(f'[Scheduler] Anomaly detected — skipping storage: {reason}')
             return None
         
-        # Step 2b: Skip if price hasn't changed meaningfully
+        # Step 2b: Skip database storage if price hasn't changed meaningfully (<0.01%)
         from database.db_manager import get_latest_price
         latest = get_latest_price()
+        skip_storage = False
         if latest and latest.get('price_24k'):
             prev   = latest['price_24k']
             change = abs((data['price_24k'] - prev) / prev) * 100
             if change < 0.01:   # less than 0.01% change = essentially same price
-                print(f'[Scheduler] Price unchanged ({data["price_24k"]}) — skipping storage')
-                # Still return data for UI update, just don't store
-                data['buy_label']  = 'GOOD TIME TO BUY'
-                data['sell_label'] = 'HOLD FOR NOW'
-                return data
+                print(f'[Scheduler] Price unchanged ({data["price_24k"]}) — skipping database storage')
+                skip_storage = True
 
         # Step 2c: Get data quality score
         quality_label, quality_score, quality_details, sources_live = get_data_quality(data)
@@ -77,45 +75,44 @@ def run_cycle():
         data['data_quality_score'] = quality_score
         print(f'[Scheduler] Data quality: {quality_label} ({quality_score}/100) — {sources_live}/3 sources live')
 
-        # Step 3: Run analytics on current price
+        # Step 3: Run analytics on current price (ALWAYS computed for complete data contract)
         analytics = run_analytics(data['price_24k'], data.get('retail_price')).to_dict()
 
-        # Step 4: Merge analytics into data
-        data['ma7']         = analytics['ma7']
-        data['ma30']        = analytics['ma30']
-        data['momentum']    = analytics['momentum']
-        data['volatility']  = analytics['volatility']
-        data['buy_score']   = analytics['buy_score']
-        data['sell_score']  = analytics['sell_score']
-        data['explanation'] = analytics['explanation']
-
-        # Confidence, trend strength, and support/resistance were previously
-        # computed by run_analytics() but never carried past this point —
-        # they're needed downstream (DB storage + dashboard display).
+        # Step 4: Merge analytics into data payload
+        data['ma7']              = analytics['ma7']
+        data['ma30']             = analytics['ma30']
+        data['momentum']         = analytics['momentum']
+        data['volatility']       = analytics['volatility']
+        data['buy_score']        = analytics['buy_score']
+        data['sell_score']       = analytics['sell_score']
+        data['explanation']      = analytics['explanation']
         data['confidence']       = analytics['confidence']
         data['confidence_label'] = analytics['confidence_label']
         data['trend_adx']        = analytics['trend_adx']
         data['support']          = analytics['support']
         data['resistance']       = analytics['resistance']
+        data['buy_label']        = analytics['buy_label']
+        data['sell_label']       = analytics['sell_label']
 
-        # Step 5: Store in database
-        insert_price(data)
-        print(f"[Scheduler] Stored → 24K: ₹{data['price_24k']} | "
-              f"Buy: {analytics['buy_score']}/100 ({analytics['buy_label']}) | "
-              f"Sell: {analytics['sell_score']}/100 ({analytics['sell_label']})")
-        
-        # Step 6: Check alerts
-        check_alerts(data['price_24k'])
+        if not skip_storage:
+            # Step 5: Store in database
+            insert_price(data)
+            print(f"[Scheduler] Stored -> 24K: INR {data['price_24k']} | "
+                  f"Buy: {analytics['buy_score']}/100 ({analytics['buy_label']}) | "
+                  f"Sell: {analytics['sell_score']}/100 ({analytics['sell_label']})")
+            
+            # Step 6: Check alerts
+            check_alerts(data['price_24k'])
 
-        # Step 7: Check for sudden price spikes
-        from database.db_manager import get_price_history
-        history = get_price_history(days=1)
-        if len(history) >= 2:
-            prev_price = history[-2]['price_24k']
-            check_price_spike(data['price_24k'], prev_price)
+            # Step 7: Check for sudden price spikes
+            from database.db_manager import get_price_history
+            history = get_price_history(days=1)
+            if len(history) >= 2:
+                prev_price = history[-2]['price_24k']
+                check_price_spike(data['price_24k'], prev_price)
 
-        # Step 8: Weekly summary (Sundays only)
-        send_weekly_summary_if_due()
+            # Step 8: Weekly summary (Sundays only)
+            send_weekly_summary_if_due()
 
         # Step 9: Fetch news context (hourly)
         news = get_news_context()
@@ -125,9 +122,6 @@ def run_cycle():
             data['explanation'] = f"{current_explanation} · {news['reasoning']}" \
                                   if current_explanation else news['reasoning']
 
-        # Return full result including labels for UI to use
-        data['buy_label']  = analytics['buy_label']
-        data['sell_label'] = analytics['sell_label']
         return data
 
     except Exception as e:
@@ -210,6 +204,8 @@ class GoldScheduler:
 
 # ─── Quick test ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     print('Testing single cycle...')
     result = run_cycle()
 
