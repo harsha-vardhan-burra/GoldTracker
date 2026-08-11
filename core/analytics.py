@@ -1034,8 +1034,16 @@ def compute_confidence_5tier(
 
     session_pts = market_ctx.reliability_factor * 10.0
 
+    # Cap confidence if strong opposing signal conflict exists
+    has_active_conflict = any(c.normalized_score > 0.3 for c in contributions.values() if c.status == "active") and \
+                          any(c.normalized_score < -0.3 for c in contributions.values() if c.status == "active")
+
     raw_confidence = completeness_pts + coverage_pts + agreement_pts + vol_pts + session_pts
     confidence = int(round(raw_confidence))
+
+    # Apply conflict cap safeguard
+    if has_active_conflict:
+        confidence = min(confidence, 69)
 
     # Strict Cap Safeguards: Never output High/Very High if key history is missing
     if len(prices) < 14:

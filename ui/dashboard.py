@@ -64,7 +64,15 @@ def format_inr_short(value):
 
 # ─── MAIN DASHBOARD ──────────────────────────────────────────────────────────
 class Dashboard(ctk.CTk):
-    def __init__(self):
+    def __init__(self, scheduler=None):
+        """
+        scheduler: an already-created, already-started GoldScheduler
+                   instance (e.g. one owned by main.py so a tray icon
+                   and this window share a single poller). If None,
+                   the dashboard falls back to creating and owning its
+                   own scheduler — this keeps `python dashboard.py`
+                   working standalone for local testing.
+        """
         super().__init__()
 
         self.title('GoldTracker — Dashboard')
@@ -79,12 +87,14 @@ class Dashboard(ctk.CTk):
 
         self.current_data  = {}
         self.active_tab    = 'dashboard'
-        self.scheduler     = None
+        self.scheduler     = scheduler
+        self.owns_scheduler = scheduler is None
         self.content_frame = None
 
         self._build_layout()
         self._load_initial_data()
         self._start_scheduler()
+        self._update_tracker_status()
 
     def _toggle_startup(self):
         enabled = self.startup_var.get() == 'on'
