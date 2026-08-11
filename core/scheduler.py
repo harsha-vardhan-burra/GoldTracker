@@ -175,6 +175,32 @@ class GoldScheduler:
         if fn in self.listeners:
             self.listeners.remove(fn)
 
+    @property
+    def on_update(self):
+        return self.listeners[0] if self.listeners else None
+
+    @on_update.setter
+    def on_update(self, fn):
+        if fn:
+            self.add_listener(fn)
+
+    @property
+    def on_fetch_complete(self):
+        return self.on_update
+
+    @on_fetch_complete.setter
+    def on_fetch_complete(self, fn):
+        if fn:
+            self.add_listener(fn)
+
+    def _notify_listeners(self, result):
+        if result:
+            for fn in list(self.listeners):
+                try:
+                    fn(result)
+                except Exception as e:
+                    print(f'[Scheduler] Listener callback error: {e}')
+
     def _run_cycle_safe(self):
         """
         Runs one cycle, guarded so two triggers (the background loop and
@@ -192,6 +218,7 @@ class GoldScheduler:
             if result:
                 self.last_success_at      = self.last_cycle_at
                 self.consecutive_failures = 0
+                self._notify_listeners(result)
             else:
                 self.consecutive_failures += 1
             return result
@@ -219,15 +246,7 @@ class GoldScheduler:
 
     def _loop(self):
         while self.running:
-            result = self._run_cycle_safe()
-
-            # Notify every registered listener
-            if result:
-                for fn in list(self.listeners):
-                    try:
-                        fn(result)
-                    except Exception as e:
-                        print(f'[Scheduler] Listener callback error: {e}')
+            self._run_cycle_safe()
 
             # Wait for next interval, but check every second
             # so we can stop quickly when app closes

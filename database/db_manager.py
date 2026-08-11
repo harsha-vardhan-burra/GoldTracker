@@ -322,6 +322,9 @@ def insert_price(data: dict):
         )
     ''', {
         **{
+            'spot_usd': None, 'usd_inr': None, 'price_24k': None, 'price_22k': None, 'retail_price': None,
+            'ma7': None, 'ma30': None, 'momentum': None, 'volatility': None,
+            'buy_score': None, 'sell_score': None, 'explanation': None,
             'data_source': 'unknown',
             'confidence': None, 'confidence_label': None, 'trend_adx': None,
             'support': None, 'resistance': None,

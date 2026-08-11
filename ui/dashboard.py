@@ -46,20 +46,41 @@ BORDER    = '#333333'
 
 
 def get_score_color(score):
+    try:
+        if score is None or str(score).strip() in ('', 'N/A', '---', 'None'):
+            return SUBTEXT
+        score = float(score)
+    except (ValueError, TypeError):
+        return SUBTEXT
     if score >= 75: return GREEN
     elif score >= 55: return '#8BC34A'
     elif score >= 35: return ORANGE
     else: return RED
 
 
+def _safe_float(val, default=None):
+    try:
+        if val is None or str(val).strip() in ('', 'N/A', '---', 'None'):
+            return default
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
 def format_inr(value):
     if value is None: return '---'
-    return f"₹{value:,.2f}"
+    try:
+        return f"₹{float(value):,.2f}"
+    except (ValueError, TypeError):
+        return '---'
 
 
 def format_inr_short(value):
     if value is None: return '---'
-    return f"₹{value:,.0f}"
+    try:
+        return f"₹{float(value):,.0f}"
+    except (ValueError, TypeError):
+        return '---'
 
 
 # ─── MAIN DASHBOARD ──────────────────────────────────────────────────────────
@@ -92,9 +113,9 @@ class Dashboard(ctk.CTk):
         self.content_frame = None
 
         self._build_layout()
-        self._load_initial_data()
         self._start_scheduler()
-        self._update_tracker_status()
+        self.after(100, self._load_initial_data)
+        self.after(200, self._update_tracker_status)
 
     def _update_tracker_status(self, data=None):
         """Thread-safe callback alias for background tracker updates."""
@@ -550,95 +571,127 @@ class Dashboard(ctk.CTk):
     def _refresh_dashboard_display(self, data):
         if not data: return
 
-        p24     = data.get('price_24k')
-        p22     = data.get('price_22k')
-        retail  = data.get('retail_price')
-        spot    = data.get('spot_usd')
-        usd_inr = data.get('usd_inr')
+        try:
+            spot = data.get('spot_price_usd') if isinstance(data, dict) else getattr(data, 'spot_price_usd', None)
+            if spot is None and isinstance(data, dict):
+                spot = data.get('spot_usd')
+            spot_str = f"${spot:,.2f}" if spot is not None else "N/A (Scraped Retail)"
 
-        if hasattr(self, 'card_24k'):
-            self.card_24k.configure(text=format_inr(p24))
-        if hasattr(self, 'card_22k'):
-            self.card_22k.configure(text=format_inr(p22))
-        if hasattr(self, 'card_retail'):
-            self.card_retail.configure(text=format_inr_short(retail))
-        if hasattr(self, 'card_premium') and p24 and retail:
-            premium = retail - p24
-            self.card_premium.configure(text=f"₹{premium:,.0f}")
+            price_24k = data.get('price_24k') if isinstance(data, dict) else getattr(data, 'price_24k', None)
+            price_24k_str = f"₹{price_24k:,.2f}/g" if price_24k is not None else "N/A"
 
-        buy_score  = data.get('buy_score') or 49
-        sell_score = data.get('sell_score') or 51
-        buy_label  = data.get('buy_label')  or get_buy_label(buy_score)
-        sell_label = data.get('sell_label') or get_sell_label(sell_score)
+            price_22k = data.get('price_22k') if isinstance(data, dict) else getattr(data, 'price_22k', None)
+            price_22k_str = f"₹{price_22k:,.2f}/g" if price_22k is not None else "N/A"
 
-        if hasattr(self, 'buy_signal_label'):
-            self.buy_signal_label.configure(
-                text=buy_label,
-                text_color=get_score_color(buy_score)
-            )
-            self.buy_score_bar.set(buy_score / 100)
-            self.buy_score_text.configure(text=f"Score: {buy_score}/100")
+            retail_price = data.get('retail_price') if isinstance(data, dict) else getattr(data, 'retail_price', None)
+            retail_str = f"₹{retail_price:,.0f}/g" if retail_price is not None else "N/A"
 
-        if hasattr(self, 'sell_signal_label'):
-            self.sell_signal_label.configure(
-                text=sell_label,
-                text_color=get_score_color(sell_score)
-            )
-            self.sell_score_bar.set(sell_score / 100)
-            self.sell_score_text.configure(text=f"Score: {sell_score}/100")
+            usd_inr = data.get('usd_inr') if isinstance(data, dict) else getattr(data, 'usd_inr', None)
 
-        if hasattr(self, 'explanation_label'):
-            self.explanation_label.configure(
-                text=data.get('explanation') or 'Not enough data yet'
-            )
+            if hasattr(self, 'card_24k'):
+                self.card_24k.configure(text=price_24k_str)
+            if hasattr(self, 'card_22k'):
+                self.card_22k.configure(text=price_22k_str)
+            if hasattr(self, 'card_retail'):
+                self.card_retail.configure(text=retail_str)
 
-        if hasattr(self, 'confidence_label'):
-            confidence       = data.get('confidence')
-            confidence_label = data.get('confidence_label')
-            if confidence is not None and confidence_label:
-                conf_colors = {'High': GREEN, 'Medium': ORANGE, 'Low': RED}
-                self.confidence_label.configure(
-                    text=f'CONFIDENCE: {confidence_label.upper()} ({confidence}%)',
-                    text_color=conf_colors.get(confidence_label, SUBTEXT)
+            if hasattr(self, 'card_premium'):
+                if price_24k is not None and retail_price is not None:
+                    try:
+                        premium = float(retail_price) - float(price_24k)
+                        self.card_premium.configure(text=f"₹{premium:,.0f}")
+                    except (ValueError, TypeError):
+                        self.card_premium.configure(text="N/A")
+                else:
+                    self.card_premium.configure(text="N/A")
+
+            buy_score_raw = data.get('buy_score') if isinstance(data, dict) else getattr(data, 'buy_score', None)
+            try:
+                buy_score = int(buy_score_raw) if buy_score_raw is not None else 49
+            except (ValueError, TypeError):
+                buy_score = 49
+
+            sell_score_raw = data.get('sell_score') if isinstance(data, dict) else getattr(data, 'sell_score', None)
+            try:
+                sell_score = int(sell_score_raw) if sell_score_raw is not None else 51
+            except (ValueError, TypeError):
+                sell_score = 51
+
+            buy_label  = (data.get('buy_label') if isinstance(data, dict) else getattr(data, 'buy_label', None)) or get_buy_label(buy_score)
+            sell_label = (data.get('sell_label') if isinstance(data, dict) else getattr(data, 'sell_label', None)) or get_sell_label(sell_score)
+
+            if hasattr(self, 'buy_signal_label'):
+                self.buy_signal_label.configure(
+                    text=buy_label,
+                    text_color=get_score_color(buy_score)
                 )
-            else:
-                self.confidence_label.configure(text='', text_color=SUBTEXT)
+                self.buy_score_bar.set(max(0.0, min(1.0, buy_score / 100)))
+                self.buy_score_text.configure(text=f"Score: {buy_score}/100")
 
-        if hasattr(self, 'ins_spot') and spot:
-            self.ins_spot.configure(text=f"${spot:,.2f}")
-        if hasattr(self, 'ins_usd_inr') and usd_inr:
-            self.ins_usd_inr.configure(text=f"₹{usd_inr:.2f}")
+            if hasattr(self, 'sell_signal_label'):
+                self.sell_signal_label.configure(
+                    text=sell_label,
+                    text_color=get_score_color(sell_score)
+                )
+                self.sell_score_bar.set(max(0.0, min(1.0, sell_score / 100)))
+                self.sell_score_text.configure(text=f"Score: {sell_score}/100")
 
-        # Poll status with source
-        source = data.get('data_source', 'unknown')
-        source_display = {
-            'goldapi.io':   'GoldAPI ✓',
-            'gold-api.com': 'Fallback ✓',
-            'unavailable':  'No Source ✗',
-            'unknown':      'Active'
-        }.get(source, 'Active')
-        if hasattr(self, 'ins_status'):
-            self.ins_status.configure(text=source_display)
+            if hasattr(self, 'explanation_label'):
+                exp_text = data.get('explanation') if isinstance(data, dict) else getattr(data, 'explanation', None)
+                self.explanation_label.configure(text=exp_text or 'Not enough data yet')
 
-        # Data quality
-        quality = data.get('data_quality', 'HIGH')
-        quality_score = data.get('data_quality_score', 100)
-        if hasattr(self, 'ins_quality'):
-            quality_colors = {
-                'HIGH':   '#00C853',
-                'MEDIUM': '#FF6D00',
-                'LOW':    '#D50000',
-                'POOR':   '#D50000'
-            }
-            color = quality_colors.get(quality, SUBTEXT)
-            self.ins_quality.configure(
-                text=f"{quality} ({quality_score}/100)",
-                text_color=color
-            )
+            if hasattr(self, 'confidence_label'):
+                confidence       = data.get('confidence') if isinstance(data, dict) else getattr(data, 'confidence', None)
+                confidence_label = data.get('confidence_label') if isinstance(data, dict) else getattr(data, 'confidence_label', None)
+                if confidence is not None and confidence_label:
+                    conf_colors = {'High': GREEN, 'Medium': ORANGE, 'Low': RED}
+                    self.confidence_label.configure(
+                        text=f'CONFIDENCE: {str(confidence_label).upper()} ({confidence}%)',
+                        text_color=conf_colors.get(confidence_label, SUBTEXT)
+                    )
+                else:
+                    self.confidence_label.configure(text='', text_color=SUBTEXT)
 
-        now = datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')
-        if hasattr(self, 'dash_updated'):
-            self.dash_updated.configure(text=f'Last updated: {now}')
+            if hasattr(self, 'ins_spot'):
+                self.ins_spot.configure(text=spot_str)
+
+            if hasattr(self, 'ins_usd_inr'):
+                usd_inr_str = f"₹{float(usd_inr):.2f}" if usd_inr is not None else "N/A"
+                self.ins_usd_inr.configure(text=usd_inr_str)
+
+            # Poll status with source
+            source = data.get('data_source', 'unknown') if isinstance(data, dict) else getattr(data, 'data_source', 'unknown')
+            source_display = {
+                'goldapi.io':   'GoldAPI ✓',
+                'gold-api.com': 'Fallback ✓',
+                'unavailable':  'No Source ✗',
+                'unknown':      'Active'
+            }.get(source, 'Active')
+            if hasattr(self, 'ins_status'):
+                self.ins_status.configure(text=source_display)
+
+            # Data quality
+            quality = data.get('data_quality', 'HIGH') if isinstance(data, dict) else getattr(data, 'data_quality', 'HIGH')
+            quality_score = data.get('data_quality_score', 100) if isinstance(data, dict) else getattr(data, 'data_quality_score', 100)
+            if hasattr(self, 'ins_quality'):
+                quality_colors = {
+                    'HIGH':   '#00C853',
+                    'MEDIUM': '#FF6D00',
+                    'LOW':    '#D50000',
+                    'POOR':   '#D50000'
+                }
+                color = quality_colors.get(quality, SUBTEXT)
+                self.ins_quality.configure(
+                    text=f"{quality} ({quality_score}/100)",
+                    text_color=color
+                )
+
+            now = datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')
+            if hasattr(self, 'dash_updated'):
+                self.dash_updated.configure(text=f'Last updated: {now}')
+
+        except Exception as e:
+            print(f'[Dashboard] Refresh error: {e}')
 
 
     # =========================================================================
@@ -686,6 +739,13 @@ class Dashboard(ctk.CTk):
         self._render_chart()
 
 
+    def _update_charts(self) -> None:
+        """Safe trigger for chart update."""
+        try:
+            self._render_chart()
+        except Exception as e:
+            print(f'[Dashboard] Chart update error: {e}')
+
     def _render_chart(self) -> None:
         import matplotlib
         matplotlib.use('Agg')
@@ -700,292 +760,330 @@ class Dashboard(ctk.CTk):
         plt.clf()
         plt.close('all')
 
+        if not hasattr(self, 'chart_container') or not self.chart_container:
+            return
+
         # Clear existing chart widgets
         for widget in self.chart_container.winfo_children():
             widget.destroy()
 
-        range_map = {'24H': 1, '7D': 7, '30D': 30}
-        days      = range_map.get(self.chart_range.get(), 1)
-        history   = get_price_history(days=days)
+        try:
+            range_map = {'24H': 1, '7D': 7, '30D': 30}
+            chart_range_val = self.chart_range.get() if hasattr(self, 'chart_range') else '24H'
+            days      = range_map.get(chart_range_val, 1)
+            history   = get_price_history(days=days) or []
 
-        # Real price rows for the line itself
-        clean = [
-            r for r in history
-            if r.get('price_24k')
-            and r.get('data_source') != 'gap_marker'
-            and r['price_24k'] > 0
-        ]
+            # Real price rows for the line itself
+            clean = [
+                r for r in history
+                if r.get('price_24k')
+                and r.get('data_source') != 'gap_marker'
+                and r['price_24k'] > 0
+            ]
 
-        # Gap markers in this window — shown as faint offline markers
-        # instead of being silently dropped, so downtime is visible in context.
-        gap_rows = [r for r in history if r.get('data_source') == 'gap_marker']
+            # Gap markers in this window — shown as faint offline markers
+            # instead of being silently dropped, so downtime is visible in context.
+            gap_rows = [r for r in history if r.get('data_source') == 'gap_marker']
 
-        if len(clean) < 2:
+            if len(clean) < 2:
+                fig = Figure(figsize=(14, 4.4), dpi=96, facecolor=CARD, tight_layout=True)
+                ax = fig.add_subplot(111, facecolor=CARD)
+                ax.text(
+                    0.5, 0.5,
+                    'Insufficient Historical Data for Charting\nRun fetch cycles to build history',
+                    ha='center', va='center',
+                    color=SUBTEXT, fontsize=12,
+                    transform=ax.transAxes
+                )
+                ax.axis('off')
+                canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill='both', expand=True, padx=8, pady=8)
+                plt.close(fig)
+                return
+
+            # ── Parse data ──
+            timestamps  = []
+            prices      = []
+            buy_scores  = []
+            sell_scores = []
+            for row in clean:
+                try:
+                    ts = datetime.datetime.fromisoformat(str(row['timestamp']))
+                except Exception:
+                    continue
+                timestamps.append(ts)
+                prices.append(row['price_24k'])
+                buy_scores.append(row.get('buy_score'))
+                sell_scores.append(row.get('sell_score'))
+
+            if len(timestamps) < 2:
+                fig = Figure(figsize=(14, 4.4), dpi=96, facecolor=CARD, tight_layout=True)
+                ax = fig.add_subplot(111, facecolor=CARD)
+                ax.text(
+                    0.5, 0.5,
+                    'Insufficient Historical Data for Charting\nRun fetch cycles to build history',
+                    ha='center', va='center',
+                    color=SUBTEXT, fontsize=12,
+                    transform=ax.transAxes
+                )
+                ax.axis('off')
+                canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill='both', expand=True, padx=8, pady=8)
+                plt.close(fig)
+                return
+
+            # ── Style constants ──
+            BG_COLOR    = '#242424'
+            GRID_COLOR  = '#333333'
+            GOLD_COLOR  = '#FFD700'
+            GREEN_COLOR = '#00C853'
+            RED_COLOR   = '#D50000'
+            BLUE_COLOR  = '#1E88E5'
+            ORANGE_COLOR= '#FF6D00'
+            TEXT_COLOR  = '#AAAAAA'
+            SPINE_COLOR = '#333333'
+
+            # ── Build figure ──
+            fig = Figure(
+                figsize     = (14, 4.4),
+                dpi         = 96,
+                facecolor   = BG_COLOR,
+                tight_layout= True,
+            )
+            ax = fig.add_subplot(111, facecolor=BG_COLOR)
+
+            # ── Plot line with gradient fill ──
+            ax.plot(
+                timestamps, prices,
+                color     = GOLD_COLOR,
+                linewidth = 1.8,
+                zorder    = 3,
+                solid_capstyle = 'round',
+            )
+
+            ax.fill_between(
+                timestamps, prices,
+                min(prices),
+                alpha = 0.15,
+                color = GOLD_COLOR,
+                zorder= 2,
+            )
+
+            # ── Start and end markers ──
+            ax.scatter([timestamps[0]],  [prices[0]],  color=GOLD_COLOR,  s=40, zorder=5, linewidths=0)
+            ax.scatter([timestamps[-1]], [prices[-1]], color=GREEN_COLOR, s=50, zorder=5, linewidths=0)
+
+            ax.annotate(
+                f"₹{prices[0]:,.0f}",
+                xy=(timestamps[0], prices[0]), xytext=(8, 6), textcoords='offset points',
+                color=TEXT_COLOR, fontsize=8,
+            )
+            ax.annotate(
+                f"₹{prices[-1]:,.0f}",
+                xy=(timestamps[-1], prices[-1]), xytext=(-60, 6), textcoords='offset points',
+                color=GREEN_COLOR, fontsize=9, fontweight='bold',
+            )
+
+            # ── High / Low markers ──
+            max_price = max(prices)
+            min_price = min(prices)
+            max_idx   = prices.index(max_price)
+            min_idx   = prices.index(min_price)
+
+            ax.scatter([timestamps[max_idx]], [max_price], color=ORANGE_COLOR, s=35, zorder=5, marker='^', linewidths=0)
+            ax.scatter([timestamps[min_idx]], [min_price], color=BLUE_COLOR,   s=35, zorder=5, marker='v', linewidths=0)
+            ax.annotate(f"H ₹{max_price:,.0f}", xy=(timestamps[max_idx], max_price), xytext=(4, 8),   textcoords='offset points', color=ORANGE_COLOR, fontsize=7.5)
+            ax.annotate(f"L ₹{min_price:,.0f}", xy=(timestamps[min_idx], min_price), xytext=(4, -14), textcoords='offset points', color=BLUE_COLOR,   fontsize=7.5)
+
+            # ── Buy / sell opportunity markers ──
+            buy_x  = [t for t, s in zip(timestamps, buy_scores)  if _safe_float(s, 0) >= 75]
+            buy_y  = [p for p, s in zip(prices, buy_scores)      if _safe_float(s, 0) >= 75]
+            sell_x = [t for t, s in zip(timestamps, sell_scores) if _safe_float(s, 0) >= 75]
+            sell_y = [p for p, s in zip(prices, sell_scores)     if _safe_float(s, 0) >= 75]
+
+            if buy_x:
+                ax.scatter(buy_x, buy_y, color=GREEN_COLOR, s=26, zorder=6, marker='o',
+                           edgecolors=BG_COLOR, linewidths=0.8)
+            if sell_x:
+                ax.scatter(sell_x, sell_y, color=RED_COLOR, s=26, zorder=6, marker='o',
+                           edgecolors=BG_COLOR, linewidths=0.8)
+
+            # ── Alert-triggered markers ──
+            has_alert_markers = False
+            try:
+                from database.db_manager import get_alert_history
+                for a in get_alert_history():
+                    try:
+                        a_ts = datetime.datetime.fromisoformat(str(a['triggered_at']))
+                    except Exception:
+                        continue
+                    if a_ts < timestamps[0] or a_ts > timestamps[-1]:
+                        continue
+                    ax.axvline(a_ts, color=BLUE_COLOR, linestyle=':', linewidth=1, alpha=0.55, zorder=1)
+                    has_alert_markers = True
+            except Exception:
+                pass
+
+            # ── Offline/gap markers ──
+            has_gap_markers = False
+            for g in gap_rows:
+                try:
+                    g_ts = datetime.datetime.fromisoformat(str(g['timestamp']))
+                except Exception:
+                    continue
+                if g_ts < timestamps[0] or g_ts > timestamps[-1]:
+                    continue
+                ax.axvline(g_ts, color=SUBTEXT, linestyle='--', linewidth=1, alpha=0.4, zorder=1)
+                has_gap_markers = True
+
+            # ── % change badge ──
+            pct_change = ((prices[-1] - prices[0]) / prices[0]) * 100
+            badge_color = GREEN_COLOR if pct_change >= 0 else RED_COLOR
+            ax.set_title(
+                f"{'▲' if pct_change >= 0 else '▼'} {abs(pct_change):.2f}%  "
+                f"over last {chart_range_val}",
+                color    = badge_color,
+                fontsize = 11,
+                fontweight = 'bold',
+                loc      = 'right',
+                pad      = 8,
+            )
+
+            # ── Grid ──
+            ax.grid(True, color=GRID_COLOR, linewidth=0.6, linestyle='--', alpha=0.5)
+            ax.set_axisbelow(True)
+
+            # ── Spines ──
+            for spine in ax.spines.values():
+                spine.set_edgecolor(SPINE_COLOR)
+                spine.set_linewidth(0.8)
+
+            # ── Tick formatting ──
+            ax.tick_params(colors=TEXT_COLOR, labelsize=8, length=3, pad=4)
+
+            # X-axis date format based on range
+            if days == 1:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+            elif days <= 7:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
+                ax.xaxis.set_major_locator(mdates.DayLocator())
+            else:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
+                ax.xaxis.set_major_locator(mdates.WeekdayLocator())
+
+            # Y-axis INR format
+            ax.yaxis.set_major_formatter(
+                matplotlib.ticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}")
+            )
+
+            # ── Y-axis padding ──
+            price_range = max_price - min_price
+            ax.set_ylim(
+                min_price - price_range * 0.08,
+                max_price + price_range * 0.12,
+            )
+
+            fig.autofmt_xdate(rotation=0, ha='center')
+
+            # ── Hover crosshair + tooltip (follows mouse, snaps to nearest point) ──
+            hover_line = ax.axvline(timestamps[0], color=TEXT_COLOR, linewidth=0.8, alpha=0, zorder=4)
+            hover_dot, = ax.plot([timestamps[0]], [prices[0]], 'o', color=GOLD_COLOR,
+                                 markersize=5, alpha=0, zorder=7)
+            hover_annot = ax.annotate(
+                '', xy=(0, 0), xytext=(12, 12), textcoords='offset points',
+                fontsize=9, color='#000000',
+                bbox=dict(boxstyle='round,pad=0.4', fc=GOLD_COLOR, ec='none', alpha=0.95),
+                zorder=10,
+            )
+            hover_annot.set_visible(False)
+
+            ts_nums = mdates.date2num(timestamps)
+            label_fmt = '%d %b, %H:%M' if days > 1 else '%H:%M'
+
+            def _on_move(event):
+                if event.inaxes != ax or event.xdata is None:
+                    if hover_annot.get_visible():
+                        hover_annot.set_visible(False)
+                        hover_line.set_alpha(0)
+                        hover_dot.set_alpha(0)
+                        canvas.draw_idle()
+                    return
+                idx = _bisect.bisect_left(ts_nums, event.xdata)
+                idx = max(0, min(idx, len(ts_nums) - 1))
+                t, p = timestamps[idx], prices[idx]
+                hover_line.set_xdata([t, t])
+                hover_line.set_alpha(0.5)
+                hover_dot.set_data([t], [p])
+                hover_dot.set_alpha(1)
+                hover_annot.xy = (t, p)
+                hover_annot.set_text(f"₹{p:,.0f}\n{t.strftime(label_fmt)}")
+                hover_annot.set_visible(True)
+                canvas.draw_idle()
+
+            def _on_leave(event):
+                hover_annot.set_visible(False)
+                hover_line.set_alpha(0)
+                hover_dot.set_alpha(0)
+                canvas.draw_idle()
+
+            # ── Embed in CustomTkinter ──
+            canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+            canvas.draw()
+            canvas.mpl_connect('motion_notify_event', _on_move)
+            canvas.mpl_connect('figure_leave_event', _on_leave)
+
+            canvas.get_tk_widget().pack(
+                fill='both', expand=True,
+                padx=8, pady=(8, 0)
+            )
+
+            # ── Zoom / pan toolbar (box-zoom, pan, reset view) ──
+            toolbar_frame = ctk.CTkFrame(self.chart_container, fg_color=BG_COLOR, corner_radius=0)
+            toolbar_frame.pack(fill='x', padx=8, pady=(0, 2))
+            try:
+                toolbar = NavigationToolbar2Tk(canvas, toolbar_frame)
+                toolbar.config(background=BG_COLOR)
+                for child in toolbar.winfo_children():
+                    try:
+                        child.configure(background=BG_COLOR)
+                    except Exception:
+                        pass
+                toolbar.update()
+            except Exception as e:
+                print(f'[Dashboard] Chart toolbar init error: {e}')
+
+            # ── Legend key for the marker colors used above ──
+            legend_bits = ['🟡 Price', '🟢 Good buy window', '🔴 Good sell window']
+            if has_alert_markers:
+                legend_bits.append('┊ Alert triggered')
+            if has_gap_markers:
+                legend_bits.append('╎ App offline')
             ctk.CTkLabel(
                 self.chart_container,
-                text='Not enough data yet — keep the app running to build history.',
-                font=ctk.CTkFont(size=13),
+                text='   '.join(legend_bits),
+                font=ctk.CTkFont(size=10),
                 text_color=SUBTEXT,
-                justify='center'
-            ).pack(pady=60)
-            return
+            ).pack(anchor='w', padx=12, pady=(0, 8))
 
-        # ── Parse data ──
-        timestamps  = []
-        prices      = []
-        buy_scores  = []
-        sell_scores = []
-        for row in clean:
-            try:
-                ts = datetime.datetime.fromisoformat(str(row['timestamp']))
-            except Exception:
-                continue
-            timestamps.append(ts)
-            prices.append(row['price_24k'])
-            buy_scores.append(row.get('buy_score'))
-            sell_scores.append(row.get('sell_score'))
-
-        if len(timestamps) < 2:
-            return
-
-        # ── Style constants ──
-        BG_COLOR    = '#242424'
-        GRID_COLOR  = '#333333'
-        GOLD_COLOR  = '#FFD700'
-        GREEN_COLOR = '#00C853'
-        RED_COLOR   = '#D50000'
-        BLUE_COLOR  = '#1E88E5'
-        ORANGE_COLOR= '#FF6D00'
-        TEXT_COLOR  = '#AAAAAA'
-        SPINE_COLOR = '#333333'
-
-        # ── Build figure ──
-        fig = Figure(
-            figsize     = (14, 4.4),
-            dpi         = 96,
-            facecolor   = BG_COLOR,
-            tight_layout= True,
-        )
-        ax = fig.add_subplot(111, facecolor=BG_COLOR)
-
-        # ── Plot line with gradient fill ──
-        ax.plot(
-            timestamps, prices,
-            color     = GOLD_COLOR,
-            linewidth = 1.8,
-            zorder    = 3,
-            solid_capstyle = 'round',
-        )
-
-        ax.fill_between(
-            timestamps, prices,
-            min(prices),
-            alpha = 0.15,
-            color = GOLD_COLOR,
-            zorder= 2,
-        )
-
-        # ── Start and end markers ──
-        ax.scatter([timestamps[0]],  [prices[0]],  color=GOLD_COLOR,  s=40, zorder=5, linewidths=0)
-        ax.scatter([timestamps[-1]], [prices[-1]], color=GREEN_COLOR, s=50, zorder=5, linewidths=0)
-
-        ax.annotate(
-            f"₹{prices[0]:,.0f}",
-            xy=(timestamps[0], prices[0]), xytext=(8, 6), textcoords='offset points',
-            color=TEXT_COLOR, fontsize=8,
-        )
-        ax.annotate(
-            f"₹{prices[-1]:,.0f}",
-            xy=(timestamps[-1], prices[-1]), xytext=(-60, 6), textcoords='offset points',
-            color=GREEN_COLOR, fontsize=9, fontweight='bold',
-        )
-
-        # ── High / Low markers ──
-        max_price = max(prices)
-        min_price = min(prices)
-        max_idx   = prices.index(max_price)
-        min_idx   = prices.index(min_price)
-
-        ax.scatter([timestamps[max_idx]], [max_price], color=ORANGE_COLOR, s=35, zorder=5, marker='^', linewidths=0)
-        ax.scatter([timestamps[min_idx]], [min_price], color=BLUE_COLOR,   s=35, zorder=5, marker='v', linewidths=0)
-        ax.annotate(f"H ₹{max_price:,.0f}", xy=(timestamps[max_idx], max_price), xytext=(4, 8),   textcoords='offset points', color=ORANGE_COLOR, fontsize=7.5)
-        ax.annotate(f"L ₹{min_price:,.0f}", xy=(timestamps[min_idx], min_price), xytext=(4, -14), textcoords='offset points', color=BLUE_COLOR,   fontsize=7.5)
-
-        # ── Buy / sell opportunity markers ──
-        # Small dots wherever the stored score crossed the "great" threshold —
-        # shows *when* good buy/sell windows actually occurred along the timeline,
-        # not just today's score.
-        buy_x  = [t for t, s in zip(timestamps, buy_scores)  if s is not None and s >= 75]
-        buy_y  = [p for p, s in zip(prices, buy_scores)      if s is not None and s >= 75]
-        sell_x = [t for t, s in zip(timestamps, sell_scores) if s is not None and s >= 75]
-        sell_y = [p for p, s in zip(prices, sell_scores)     if s is not None and s >= 75]
-
-        if buy_x:
-            ax.scatter(buy_x, buy_y, color=GREEN_COLOR, s=26, zorder=6, marker='o',
-                       edgecolors=BG_COLOR, linewidths=0.8)
-        if sell_x:
-            ax.scatter(sell_x, sell_y, color=RED_COLOR, s=26, zorder=6, marker='o',
-                       edgecolors=BG_COLOR, linewidths=0.8)
-
-        # ── Alert-triggered markers ──
-        has_alert_markers = False
-        try:
-            from database.db_manager import get_alert_history
-            for a in get_alert_history():
-                try:
-                    a_ts = datetime.datetime.fromisoformat(str(a['triggered_at']))
-                except Exception:
-                    continue
-                if a_ts < timestamps[0] or a_ts > timestamps[-1]:
-                    continue
-                ax.axvline(a_ts, color=BLUE_COLOR, linestyle=':', linewidth=1, alpha=0.55, zorder=1)
-                has_alert_markers = True
-        except Exception:
-            pass
-
-        # ── Offline/gap markers ──
-        has_gap_markers = False
-        for g in gap_rows:
-            try:
-                g_ts = datetime.datetime.fromisoformat(str(g['timestamp']))
-            except Exception:
-                continue
-            if g_ts < timestamps[0] or g_ts > timestamps[-1]:
-                continue
-            ax.axvline(g_ts, color=SUBTEXT, linestyle='--', linewidth=1, alpha=0.4, zorder=1)
-            has_gap_markers = True
-
-        # ── % change badge ──
-        pct_change = ((prices[-1] - prices[0]) / prices[0]) * 100
-        badge_color = GREEN_COLOR if pct_change >= 0 else RED_COLOR
-        ax.set_title(
-            f"{'▲' if pct_change >= 0 else '▼'} {abs(pct_change):.2f}%  "
-            f"over last {self.chart_range.get()}",
-            color    = badge_color,
-            fontsize = 11,
-            fontweight = 'bold',
-            loc      = 'right',
-            pad      = 8,
-        )
-
-        # ── Grid ──
-        ax.grid(True, color=GRID_COLOR, linewidth=0.6, linestyle='--', alpha=0.5)
-        ax.set_axisbelow(True)
-
-        # ── Spines ──
-        for spine in ax.spines.values():
-            spine.set_edgecolor(SPINE_COLOR)
-            spine.set_linewidth(0.8)
-
-        # ── Tick formatting ──
-        ax.tick_params(colors=TEXT_COLOR, labelsize=8, length=3, pad=4)
-
-        # X-axis date format based on range
-        if days == 1:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
-        elif days <= 7:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
-            ax.xaxis.set_major_locator(mdates.DayLocator())
-        else:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
-            ax.xaxis.set_major_locator(mdates.WeekdayLocator())
-
-        # Y-axis INR format
-        ax.yaxis.set_major_formatter(
-            matplotlib.ticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}")
-        )
-
-        # ── Y-axis padding ──
-        price_range = max_price - min_price
-        ax.set_ylim(
-            min_price - price_range * 0.08,
-            max_price + price_range * 0.12,
-        )
-
-        fig.autofmt_xdate(rotation=0, ha='center')
-
-        # ── Hover crosshair + tooltip (follows mouse, snaps to nearest point) ──
-        hover_line = ax.axvline(timestamps[0], color=TEXT_COLOR, linewidth=0.8, alpha=0, zorder=4)
-        hover_dot, = ax.plot([timestamps[0]], [prices[0]], 'o', color=GOLD_COLOR,
-                             markersize=5, alpha=0, zorder=7)
-        hover_annot = ax.annotate(
-            '', xy=(0, 0), xytext=(12, 12), textcoords='offset points',
-            fontsize=9, color='#000000',
-            bbox=dict(boxstyle='round,pad=0.4', fc=GOLD_COLOR, ec='none', alpha=0.95),
-            zorder=10,
-        )
-        hover_annot.set_visible(False)
-
-        ts_nums = mdates.date2num(timestamps)
-        label_fmt = '%d %b, %H:%M' if days > 1 else '%H:%M'
-
-        def _on_move(event):
-            if event.inaxes != ax or event.xdata is None:
-                if hover_annot.get_visible():
-                    hover_annot.set_visible(False)
-                    hover_line.set_alpha(0)
-                    hover_dot.set_alpha(0)
-                    canvas.draw_idle()
-                return
-            idx = _bisect.bisect_left(ts_nums, event.xdata)
-            idx = max(0, min(idx, len(ts_nums) - 1))
-            t, p = timestamps[idx], prices[idx]
-            hover_line.set_xdata([t, t])
-            hover_line.set_alpha(0.5)
-            hover_dot.set_data([t], [p])
-            hover_dot.set_alpha(1)
-            hover_annot.xy = (t, p)
-            hover_annot.set_text(f"₹{p:,.0f}\n{t.strftime(label_fmt)}")
-            hover_annot.set_visible(True)
-            canvas.draw_idle()
-
-        def _on_leave(event):
-            hover_annot.set_visible(False)
-            hover_line.set_alpha(0)
-            hover_dot.set_alpha(0)
-            canvas.draw_idle()
-
-        # ── Embed in CustomTkinter ──
-        canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
-        canvas.draw()
-        canvas.mpl_connect('motion_notify_event', _on_move)
-        canvas.mpl_connect('figure_leave_event', _on_leave)
-
-        canvas.get_tk_widget().pack(
-            fill='both', expand=True,
-            padx=8, pady=(8, 0)
-        )
-
-        # ── Zoom / pan toolbar (box-zoom, pan, reset view) ──
-        toolbar_frame = ctk.CTkFrame(self.chart_container, fg_color=BG_COLOR, corner_radius=0)
-        toolbar_frame.pack(fill='x', padx=8, pady=(0, 2))
-        try:
-            toolbar = NavigationToolbar2Tk(canvas, toolbar_frame)
-            toolbar.config(background=BG_COLOR)
-            for child in toolbar.winfo_children():
-                try:
-                    child.configure(background=BG_COLOR)
-                except Exception:
-                    pass
-            toolbar.update()
+            plt.close(fig)
         except Exception as e:
-            print(f'[Dashboard] Chart toolbar init error: {e}')
-
-        # ── Legend key for the marker colors used above ──
-        legend_bits = ['🟡 Price', '🟢 Good buy window', '🔴 Good sell window']
-        if has_alert_markers:
-            legend_bits.append('┊ Alert triggered')
-        if has_gap_markers:
-            legend_bits.append('╎ App offline')
-        ctk.CTkLabel(
-            self.chart_container,
-            text='   '.join(legend_bits),
-            font=ctk.CTkFont(size=10),
-            text_color=SUBTEXT,
-        ).pack(anchor='w', padx=12, pady=(0, 8))
-
-        plt.close(fig)
+            print(f'[Dashboard] Error rendering chart: {e}')
+            if hasattr(self, 'chart_container') and self.chart_container:
+                for widget in self.chart_container.winfo_children():
+                    try:
+                        widget.destroy()
+                    except Exception:
+                        pass
+                ctk.CTkLabel(
+                    self.chart_container,
+                    text='Unable to display chart right now.',
+                    font=ctk.CTkFont(size=13),
+                    text_color=SUBTEXT,
+                    justify='center'
+                ).pack(pady=60)
 
 
     # =========================================================================
@@ -1721,11 +1819,17 @@ class Dashboard(ctk.CTk):
             p24   = format_inr(row_data.get('price_24k'))
             p22   = format_inr(row_data.get('price_22k'))
             ret   = format_inr_short(row_data.get('retail_price'))
-            score = row_data.get('buy_score') or 0
-            sig   = get_buy_label(score)
+            raw_score = row_data.get('buy_score')
+            try:
+                numeric_score = float(raw_score) if raw_score not in (None, 'N/A', '---', '', 'None') else 0.0
+            except (ValueError, TypeError):
+                numeric_score = 0.0
 
-            values = [ts, p24, p22, ret, f"{score}/100", sig]
-            colors = [SUBTEXT, TEXT, TEXT, GOLD, SUBTEXT, get_score_color(score)]
+            sig   = get_buy_label(numeric_score)
+            score_text = f"{numeric_score:.0f}/100" if numeric_score > 0 else "N/A"
+
+            values = [ts, p24, p22, ret, score_text, sig]
+            colors = [SUBTEXT, TEXT, TEXT, GOLD, SUBTEXT, get_score_color(numeric_score)]
 
             for val, color, w in zip(values, colors, widths):
                 ctk.CTkLabel(row, text=val,
@@ -1942,12 +2046,16 @@ class Dashboard(ctk.CTk):
     # SCHEDULER + DATA FLOW
     # =========================================================================
     def _load_initial_data(self):
-        latest = get_latest_price()
-        if latest:
-            latest['buy_label']  = get_buy_label(latest.get('buy_score') or 49)
-            latest['sell_label'] = get_sell_label(latest.get('sell_score') or 51)
-            self.current_data = latest
-            self._refresh_dashboard_display(latest)
+        try:
+            latest = get_latest_price()
+            if latest:
+                latest['buy_label']  = get_buy_label(latest.get('buy_score') or 49)
+                latest['sell_label'] = get_sell_label(latest.get('sell_score') or 51)
+                self.current_data = latest
+                self._refresh_dashboard_display(self.current_data)
+                self._update_charts()
+        except Exception as e:
+            print(f'[Dashboard] Error loading initial data: {e}')
 
 
     def _start_scheduler(self):
@@ -1956,18 +2064,12 @@ class Dashboard(ctk.CTk):
             self.scheduler.start()
             self.owns_scheduler = True
         else:
-            prev_callback = getattr(self.scheduler, 'on_update', None)
-            if prev_callback and prev_callback != self._on_scheduler_update:
-                def chained_update(data):
-                    try:
-                        prev_callback(data)
-                    except Exception as e:
-                        print(f'[SchedulerCallback] Error: {e}')
-                    self._on_scheduler_update(data)
-                self.scheduler.on_update = chained_update
-            else:
-                self.scheduler.on_update = self._on_scheduler_update
             self.owns_scheduler = False
+
+        if self.scheduler:
+            self.scheduler.on_fetch_complete = lambda data: self.after(
+                0, lambda: self._refresh_dashboard_display(data)
+            )
 
         self.after(800, self._fetch_in_background)
 
@@ -2019,6 +2121,8 @@ class Dashboard(ctk.CTk):
             )
         except Exception:
             pass
+
+DashboardApp = Dashboard
 
 # ─── Run ─────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':

@@ -1090,8 +1090,15 @@ def compute_confidence_5tier(
 # ── LABELS & EXPLANATION GENERATOR ─────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
-def get_buy_label(score: int) -> str:
+def get_buy_label(score) -> str:
     """Return buy decision label based on buy_score."""
+    try:
+        if score is None or str(score).strip() in ('', 'N/A', '---', 'None'):
+            return "N/A"
+        score = float(score)
+    except (ValueError, TypeError):
+        return "N/A"
+
     if score >= BUY_LABEL_GREAT:
         return "PERFECT TIME TO BUY"
     if score >= BUY_LABEL_GOOD:
@@ -1101,8 +1108,15 @@ def get_buy_label(score: int) -> str:
     return "BAD TIME TO BUY"
 
 
-def get_sell_label(sell_score: int) -> str:
+def get_sell_label(sell_score) -> str:
     """Return sell decision label based on sell_score (100 - buy_score)."""
+    try:
+        if sell_score is None or str(sell_score).strip() in ('', 'N/A', '---', 'None'):
+            return "N/A"
+        sell_score = float(sell_score)
+    except (ValueError, TypeError):
+        return "N/A"
+
     if sell_score >= SELL_LABEL_GREAT:
         return "PERFECT TIME TO SELL"
     if sell_score >= SELL_LABEL_GOOD:
