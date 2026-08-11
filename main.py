@@ -95,7 +95,7 @@ def main():
     if launch_mode == 'popup':
         t = threading.Thread(target=_launch_popup, args=(scheduler,), daemon=True)
     else:
-        t = threading.Thread(target=_launch_dashboard, daemon=True)
+        t = threading.Thread(target=_launch_dashboard, args=(scheduler,), daemon=True)
 
     t.start()
 
@@ -107,12 +107,12 @@ def main():
     print('[Main] GoldTracker exited cleanly.')
     logger.info('GoldTracker exited')
 
-def _launch_popup(scheduler):
+def _launch_popup(scheduler=None):
     try:
         from ui.startup_popup import StartupPopup
         import customtkinter as ctk
 
-        app = StartupPopup()
+        app = StartupPopup(scheduler=scheduler)
 
         ctk.CTkButton(
             app,
@@ -121,7 +121,7 @@ def _launch_popup(scheduler):
             hover_color='#2a2a2a',
             text_color='#AAAAAA',
             font=ctk.CTkFont(size=11),
-            command=lambda: _switch_to_dashboard(app)
+            command=lambda: _switch_to_dashboard(app, scheduler)
         ).pack(pady=(0, 8))
 
         app.protocol('WM_DELETE_WINDOW', app.on_closing)
@@ -130,19 +130,19 @@ def _launch_popup(scheduler):
         print(f'[Main] Popup error: {e}')
 
 
-def _launch_dashboard():
+def _launch_dashboard(scheduler=None):
     try:
         from ui.dashboard import Dashboard
-        app = Dashboard()
+        app = Dashboard(scheduler=scheduler)
         app.protocol('WM_DELETE_WINDOW', app.on_closing)
         app.mainloop()
     except Exception as e:
         print(f'[Main] Dashboard error: {e}')
 
 
-def _switch_to_dashboard(popup):
+def _switch_to_dashboard(popup, scheduler=None):
     popup.on_closing()
-    _launch_dashboard()
+    _launch_dashboard(scheduler)
 
 
 if __name__ == '__main__':

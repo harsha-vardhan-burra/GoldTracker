@@ -125,6 +125,21 @@ def initialize_database():
             data_source     TEXT
         )
     ''')
+    # Analytics history table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analytics_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       DATETIME DEFAULT CURRENT_TIMESTAMP,
+            signal          TEXT,
+            score           REAL,
+            confidence      REAL,
+            reasoning       TEXT,
+            adx             REAL,
+            atr             REAL,
+            volatility      REAL,
+            retail_premium  REAL
+        )
+    ''')
     conn.commit()
     conn.close()
     print('Database initialized successfully at:', DB_PATH)
@@ -134,6 +149,94 @@ def initialize_database():
     # so it's safe to call them unconditionally on every startup.
     migrate_add_source_column()
     migrate_add_analytics_columns()
+    migrate_add_analytics_history_table()
+
+def migrate_add_analytics_history_table():
+    """
+    Ensures analytics_history table exists and contains all required columns.
+    Idempotent and safe to run on existing databases.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analytics_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       DATETIME DEFAULT CURRENT_TIMESTAMP,
+            signal          TEXT,
+            score           REAL,
+            confidence      REAL,
+            reasoning       TEXT,
+            adx             REAL,
+            atr             REAL,
+            volatility      REAL,
+            retail_premium  REAL
+        )
+    ''')
+    conn.commit()
+
+    cursor.execute("PRAGMA table_info(analytics_history)")
+    columns = [row['name'] for row in cursor.fetchall()]
+
+    new_cols = [
+        ('signal', 'TEXT'),
+        ('score', 'REAL'),
+        ('confidence', 'REAL'),
+        ('reasoning', 'TEXT'),
+        ('adx', 'REAL'),
+        ('atr', 'REAL'),
+        ('volatility', 'REAL'),
+        ('retail_premium', 'REAL')
+    ]
+
+    for col_name, col_type in new_cols:
+        if col_name not in columns:
+            cursor.execute(f'ALTER TABLE analytics_history ADD COLUMN {col_name} {col_type}')
+            print(f'[Migration] Added {col_name} column to analytics_history')
+
+    conn.commit()
+    conn.close()
+
+
+def save_analytics(analytics_data):
+    """
+    Persists AnalyticsResult or analytics dictionary into analytics_history table.
+    """
+    if hasattr(analytics_data, 'to_dict'):
+        d = analytics_data.to_dict()
+    elif isinstance(analytics_data, dict):
+        d = analytics_data
+    else:
+        d = {}
+
+    conn   = get_connection()
+    cursor = conn.cursor()
+
+    signal = d.get('buy_label') or d.get('signal') or 'NEUTRAL'
+    score  = d.get('buy_score') if d.get('buy_score') is not None else d.get('score')
+    confidence = d.get('confidence')
+    reasoning  = d.get('explanation') or d.get('reasoning')
+    adx        = d.get('adx_value') or d.get('trend_adx') or d.get('adx')
+    atr        = d.get('atr_value') or d.get('atr') or d.get('volatility')
+    volatility = d.get('volatility')
+
+    premium_val = d.get('retail_premium')
+    if premium_val is None and isinstance(d.get('premium_stats'), dict):
+        premium_val = d['premium_stats'].get('current_premium')
+
+    cursor.execute('''
+        INSERT INTO analytics_history (
+            timestamp, signal, score, confidence, reasoning,
+            adx, atr, volatility, retail_premium
+        ) VALUES (
+            CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+    ''', (signal, score, confidence, reasoning, adx, atr, volatility, premium_val))
+
+    conn.commit()
+    conn.close()
+
+insert_analytics = save_analytics
 
 def migrate_add_source_column():
     """
@@ -219,6 +322,7 @@ def insert_price(data: dict):
         )
     ''', {
         **{
+            'data_source': 'unknown',
             'confidence': None, 'confidence_label': None, 'trend_adx': None,
             'support': None, 'resistance': None,
             'data_quality': None, 'data_quality_score': None,

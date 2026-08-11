@@ -205,6 +205,20 @@ class AnalyticsResult:
     contributions: Dict[str, IndicatorContribution] = field(default_factory=dict)
     data_quality_notes: List[str] = field(default_factory=list)
 
+    @property
+    def adx_value(self) -> float:
+        return self.trend_adx
+
+    @property
+    def atr_value(self) -> Optional[float]:
+        return self.volatility
+
+    @property
+    def retail_premium(self) -> Optional[float]:
+        if isinstance(self.premium_stats, dict):
+            return self.premium_stats.get('current_premium')
+        return None
+
     def to_dict(self) -> dict:
         """Serialise to a plain dictionary for caller compatibility."""
         return {
@@ -223,6 +237,11 @@ class AnalyticsResult:
             "premium_label": self.premium_label,
             "premium_stats": self.premium_stats,
             "trend_adx": self.trend_adx,
+            "adx_value": self.adx_value,
+            "adx": self.trend_adx,
+            "atr_value": self.atr_value,
+            "atr": self.atr_value,
+            "retail_premium": self.retail_premium,
             "trend_label": self.trend_label,
             "trend_direction": self.trend_direction,
             "support": self.support,

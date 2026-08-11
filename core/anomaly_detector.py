@@ -49,7 +49,7 @@ def log_anomaly(price_received, previous_price, change_pct, reason, source):
         ''', (price_received, previous_price, change_pct, reason, source))
         conn.commit()
         conn.close()
-        print(f'[AnomalyDetector] Logged: {reason} — received ₹{price_received}')
+        print(f'[AnomalyDetector] Logged: {reason} - received Rs.{price_received}')
     except Exception as e:
         print(f'[AnomalyDetector] Log error: {e}')
 
@@ -79,10 +79,10 @@ def validate_price(price_24k, data_source='unknown'):
 
     # Rule 2 — must be within realistic bounds
     if price_24k < MIN_REALISTIC_PRICE:
-        return False, f'Price ₹{price_24k} below minimum ₹{MIN_REALISTIC_PRICE}'
+        return False, f'Price Rs.{price_24k} below minimum Rs.{MIN_REALISTIC_PRICE}'
 
     if price_24k > MAX_REALISTIC_PRICE:
-        return False, f'Price ₹{price_24k} above maximum ₹{MAX_REALISTIC_PRICE}'
+        return False, f'Price Rs.{price_24k} above maximum Rs.{MAX_REALISTIC_PRICE}'
 
     # Rule 3 — must not change too fast vs previous reading
     latest = get_latest_price()
@@ -97,7 +97,7 @@ def validate_price(price_24k, data_source='unknown'):
                 f'Change of {change_pct:.1f}% exceeds {MAX_CHANGE_PCT}% threshold',
                 data_source
             )
-            return False, f'Price jumped {change_pct:.1f}% — exceeds {MAX_CHANGE_PCT}% threshold'
+            return False, f'Price jumped {change_pct:.1f}% - exceeds {MAX_CHANGE_PCT}% threshold'
 
     return True, 'OK'
 

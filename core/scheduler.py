@@ -17,11 +17,11 @@ try:
     from core.news_engine   import get_news_context
     from core.data_engine   import fetch_all
     from core.analytics     import run_analytics
-    from database.db_manager import insert_price, get_setting, get_price_history
     from core.anomaly_detector import validate_price, get_data_quality
     from database.db_manager import (
         insert_price, get_setting, get_price_history,
-        insert_gap_marker, get_last_reading_age_minutes
+        insert_gap_marker, get_last_reading_age_minutes,
+        save_analytics
     )
 except ImportError:
     # When run directly (core context)
@@ -31,11 +31,11 @@ except ImportError:
     from data_engine   import fetch_all
     from analytics     import run_analytics
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-    from database.db_manager import insert_price, get_setting, get_price_history
     from anomaly_detector import validate_price, get_data_quality
     from database.db_manager import (
         insert_price, get_setting, get_price_history,
-        insert_gap_marker, get_last_reading_age_minutes
+        insert_gap_marker, get_last_reading_age_minutes,
+        save_analytics
     )
 # ─── SINGLE FETCH + STORE CYCLE ──────────────────────────────────────────────
 def run_cycle():
@@ -46,7 +46,7 @@ def run_cycle():
         data = fetch_all()
 
         if not data or not data.get('price_24k'):
-            print('[Scheduler] Fetch returned no usable data — skipping this cycle')
+            print('[Scheduler] Fetch returned no usable data - skipping this cycle')
             return None
 
         # Step 2: Validate price before storing
@@ -55,7 +55,7 @@ def run_cycle():
             data.get('data_source', 'unknown')
         )
         if not is_valid:
-            print(f'[Scheduler] Anomaly detected — skipping storage: {reason}')
+            print(f'[Scheduler] Anomaly detected - skipping storage: {reason}')
             return None
         
         # Step 2b: Skip if price hasn't changed meaningfully
@@ -65,7 +65,7 @@ def run_cycle():
             prev   = latest['price_24k']
             change = abs((data['price_24k'] - prev) / prev) * 100
             if change < 0.01:   # less than 0.01% change = essentially same price
-                print(f'[Scheduler] Price unchanged ({data["price_24k"]}) — skipping storage')
+                print(f'[Scheduler] Price unchanged ({data["price_24k"]}) - skipping storage')
                 # Still return data for UI update, just don't store
                 data['buy_label']  = 'GOOD TIME TO BUY'
                 data['sell_label'] = 'HOLD FOR NOW'
@@ -75,7 +75,7 @@ def run_cycle():
         quality_label, quality_score, quality_details, sources_live = get_data_quality(data)
         data['data_quality']       = quality_label
         data['data_quality_score'] = quality_score
-        print(f'[Scheduler] Data quality: {quality_label} ({quality_score}/100) — {sources_live}/3 sources live')
+        print(f'[Scheduler] Data quality: {quality_label} ({quality_score}/100) - {sources_live}/3 sources live')
 
         # Step 3: Run analytics on current price
         analytics = run_analytics(data['price_24k'], data.get('retail_price')).to_dict()
@@ -100,7 +100,8 @@ def run_cycle():
 
         # Step 5: Store in database
         insert_price(data)
-        print(f"[Scheduler] Stored → 24K: ₹{data['price_24k']} | "
+        save_analytics(analytics)
+        print(f"[Scheduler] Stored -> 24K: Rs.{data['price_24k']} | "
               f"Buy: {analytics['buy_score']}/100 ({analytics['buy_label']}) | "
               f"Sell: {analytics['sell_score']}/100 ({analytics['sell_label']})")
         

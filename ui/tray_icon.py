@@ -103,7 +103,7 @@ class GoldTrayIcon:
             try:
                 from ui.dashboard import Dashboard
                 import customtkinter as ctk
-                app = Dashboard()
+                app = Dashboard(scheduler=self.scheduler)
 
                 def on_close():
                     self.dashboard_open = False
@@ -126,7 +126,7 @@ class GoldTrayIcon:
             self.popup_open = True
             try:
                 from ui.startup_popup import StartupPopup
-                app = StartupPopup()
+                app = StartupPopup(scheduler=self.scheduler)
 
                 def on_close():
                     self.popup_open = False

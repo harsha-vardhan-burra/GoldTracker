@@ -38,26 +38,55 @@ SCRAPE_HEADERS = {
     'Referer': 'https://www.google.com',
 }
 
+# ─── SANITY BOUNDS ───────────────────────────────────────────────────────────
+MIN_SPOT_USD = 500.0     # $500/oz min sanity bound
+MAX_SPOT_USD = 10000.0   # $10,000/oz max sanity bound
+MIN_USD_INR  = 50.0      # 50 INR/USD min
+MAX_USD_INR  = 200.0     # 200 INR/USD max
+MIN_GOLD_INR = 3000.0    # ₹3,000/gram min
+MAX_GOLD_INR = 30000.0   # ₹30,000/gram max
 
-# ─── FETCH 1: Gold spot price in USD ─────────────────────────────────────────
+
+def validate_spot_price(price_oz):
+    if not price_oz or not isinstance(price_oz, (int, float)):
+        return False
+    return MIN_SPOT_USD <= price_oz <= MAX_SPOT_USD
+
+
+def validate_usd_inr(rate):
+    if not rate or not isinstance(rate, (int, float)):
+        return False
+    return MIN_USD_INR <= rate <= MAX_USD_INR
+
+
+def validate_gold_inr(price):
+    if not price or not isinstance(price, (int, float)):
+        return False
+    return MIN_GOLD_INR <= price <= MAX_GOLD_INR
+
+
+# --- FETCH 1: Gold spot price in USD -----------------------------------------
 def fetch_spot_price_usd():
-    # ── Primary: gold-api.com (no key, no limits) ──
+    # --- Primary: gold-api.com (no key, no limits) ---
     try:
         r = requests.get('https://api.gold-api.com/price/XAU', timeout=10)
 
         if r.status_code == 200:
             data       = r.json()
             price_oz   = data.get('price', 0)
-            price_gram = round(price_oz / 31.1035, 4)
-            print(f'[GoldAPI] Spot: ${price_oz}/oz → ${price_gram}/gram')
-            return price_oz, price_gram, 'gold-api.com'
+            if validate_spot_price(price_oz):
+                price_gram = round(price_oz / 31.1035, 4)
+                print(f'[GoldAPI] Spot: ${price_oz}/oz -> ${price_gram}/gram')
+                return price_oz, price_gram, 'gold-api.com'
+            else:
+                print(f'[gold-api.com] Rejected out-of-bounds price: ${price_oz}/oz')
         else:
-            print(f'[gold-api.com] Failed: {r.status_code} — trying fallback')
+            print(f'[gold-api.com] Failed: {r.status_code} - trying fallback')
 
     except Exception as e:
-        print(f'[gold-api.com] Error: {e} — trying fallback')
+        print(f'[gold-api.com] Error: {e} - trying fallback')
 
-    # ── Fallback: GoldAPI.io (100 req/month, use sparingly) ──
+    # --- Fallback: GoldAPI.io (100 req/month, use sparingly) ---
     try:
         api_key = load_api_key()
         if api_key:
@@ -68,9 +97,12 @@ def fetch_spot_price_usd():
             if r.status_code == 200:
                 data       = r.json()
                 price_oz   = data.get('price', 0)
-                price_gram = round(price_oz / 31.1035, 4)
-                print(f'[GoldAPI.io Fallback] Spot: ${price_oz}/oz → ${price_gram}/gram')
-                return price_oz, price_gram, 'goldapi.io'
+                if validate_spot_price(price_oz):
+                    price_gram = round(price_oz / 31.1035, 4)
+                    print(f'[GoldAPI.io Fallback] Spot: ${price_oz}/oz -> ${price_gram}/gram')
+                    return price_oz, price_gram, 'goldapi.io'
+                else:
+                    print(f'[GoldAPI.io] Rejected out-of-bounds price: ${price_oz}/oz')
             else:
                 print(f'[GoldAPI.io] Failed: {r.status_code}')
 
@@ -79,7 +111,7 @@ def fetch_spot_price_usd():
 
     return None, None, 'unavailable'
 
-# ─── FETCH 2: USD to INR exchange rate ───────────────────────────────────────
+# --- FETCH 2: USD to INR exchange rate ---------------------------------------
 def fetch_usd_inr():
     try:
         url = 'https://api.frankfurter.dev/v2/rate/USD/INR'
@@ -88,8 +120,12 @@ def fetch_usd_inr():
         if r.status_code == 200:
             data = r.json()
             rate = data.get('rate', 0)
-            print(f'[Frankfurter] USD/INR: {rate}')
-            return rate
+            if validate_usd_inr(rate):
+                print(f'[Frankfurter] USD/INR: {rate}')
+                return rate
+            else:
+                print(f'[Frankfurter] Rejected out-of-bounds rate: {rate}')
+                return None
         else:
             print(f'[Frankfurter] Failed: {r.status_code}')
             return None
@@ -99,7 +135,7 @@ def fetch_usd_inr():
         return None
 
 
-# ─── FETCH 3: Retail price from GoodReturns (Vijayawada) ─────────────────────
+# --- FETCH 3: Retail price from GoodReturns (Vijayawada) ---------------------
 def fetch_retail_price():
     try:
         city = get_setting('city') or 'vijayawada'
@@ -115,7 +151,7 @@ def fetch_retail_price():
         # Find the main gold rate table
         table_divs = soup.find_all('div', {'class': 'gr-table-wrap'})
         if not table_divs:
-            print('[GoodReturns] Table not found — page structure may have changed')
+            print('[GoodReturns] Table not found - page structure may have changed')
             return None
 
         # Table 1 = today's rates (24K, 22K, 18K)
@@ -132,25 +168,30 @@ def fetch_retail_price():
                 # Only grab the 1 gram row
                 if gram_label.strip() == '1':
                     try:
-                        # Price cell contains "₹15,606\n(-223)"
+                        # Price cell contains "Rs.15,606\n(-223)"
                         # We only want the number before the newline
                         raw_24k = cols[1].text.strip().split('\n')[0]
                         raw_22k = cols[2].text.strip().split('\n')[0]
 
-                        # Remove ₹ and commas
-                        clean_24k = raw_24k.replace('₹', '').replace(',', '').strip()
-                        clean_22k = raw_22k.replace('₹', '').replace(',', '').strip()
+                        # Remove ₹, Rs., and commas
+                        clean_24k = raw_24k.replace('₹', '').replace('Rs.', '').replace(',', '').strip()
+                        clean_22k = raw_22k.replace('₹', '').replace('Rs.', '').replace(',', '').strip()
 
-                        retail_24k = float(clean_24k)
-                        retail_22k = float(clean_22k)
+                        val_24k = float(clean_24k)
+                        val_22k = float(clean_22k)
+                        if validate_gold_inr(val_24k):
+                            retail_24k = val_24k
+                            retail_22k = val_22k
+                        else:
+                            print(f'[GoodReturns] Rejected out-of-bounds price: Rs.{val_24k}')
                         break
                     except ValueError as e:
                         print(f'[GoodReturns] Parse error: {e}')
                         continue
         
         if retail_24k:
-            print(f'[GoodReturns] Retail 24K ({city}): ₹{retail_24k}/gram')
-            print(f'[GoodReturns] Retail 22K ({city}): ₹{retail_22k}/gram')
+            print(f'[GoodReturns] Retail 24K ({city}): Rs.{retail_24k}/gram')
+            print(f'[GoodReturns] Retail 22K ({city}): Rs.{retail_22k}/gram')
         else:
             print('[GoodReturns] Could not parse retail price')
 
@@ -167,17 +208,21 @@ def calculate_inr_prices(spot_usd_per_gram, usd_inr):
         return None, None
 
     price_24k = round(spot_usd_per_gram * usd_inr, 2)
+    if not validate_gold_inr(price_24k):
+        print(f'[Calc] Calculated 24K price out of bounds: Rs.{price_24k}')
+        return None, None
+
     price_22k = round(price_24k * (22 / 24), 2)
 
-    print(f'[Calc] 24K: ₹{price_24k}/gram | 22K: ₹{price_22k}/gram')
+    print(f'[Calc] 24K: Rs.{price_24k}/gram | 22K: Rs.{price_22k}/gram')
     return price_24k, price_22k
 
 
 # ─── MAIN: Fetch everything and return unified data object ───────────────────
 def fetch_all():
-    print('\n' + '─'*50)
+    print('\n' + '-'*50)
     print('Fetching gold data...')
-    print('─'*50)
+    print('-'*50)
 
     spot_usd_oz, spot_usd_gram, spot_source = fetch_spot_price_usd()
     usd_inr                    = fetch_usd_inr()
@@ -185,10 +230,15 @@ def fetch_all():
     price_24k, price_22k       = calculate_inr_prices(spot_usd_gram, usd_inr)
 
      # ── Fallback: if GoldAPI fails, use retail as primary ──
-    if not price_24k and retail_price:
-        print('[DataEngine] GoldAPI unavailable — using retail as primary price')
+    if not price_24k and retail_price and validate_gold_inr(retail_price):
+        print('[DataEngine] GoldAPI unavailable - using retail as primary price')
         price_24k = retail_price
         price_22k = round(retail_price * (22/24), 2)
+
+    if price_24k and not validate_gold_inr(price_24k):
+        print(f'[DataEngine] Invalid price_24k detected: Rs.{price_24k} - setting to None')
+        price_24k = None
+        price_22k = None
 
     result = {
         'spot_usd':     round(spot_usd_oz, 2)   if spot_usd_oz   else None,
@@ -208,14 +258,14 @@ def fetch_all():
         'data_source':  spot_source
     }
 
-    print('─'*50)
+    print('-'*50)
     print('Fetch complete.')
     print(f"  Spot (USD/oz) : ${result['spot_usd']}")
     print(f"  USD/INR       : {result['usd_inr']}")
-    print(f"  24K (calc)    : ₹{result['price_24k']}/gram")
-    print(f"  22K (calc)    : ₹{result['price_22k']}/gram")
-    print(f"  Retail price  : ₹{result['retail_price']}/gram")
-    print('─'*50 + '\n')
+    print(f"  24K (calc)    : Rs.{result['price_24k']}/gram")
+    print(f"  22K (calc)    : Rs.{result['price_22k']}/gram")
+    print(f"  Retail price  : Rs.{result['retail_price']}/gram")
+    print('-'*50 + '\n')
 
     return result
 

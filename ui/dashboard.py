@@ -96,6 +96,10 @@ class Dashboard(ctk.CTk):
         self._start_scheduler()
         self._update_tracker_status()
 
+    def _update_tracker_status(self, data=None):
+        """Thread-safe callback alias for background tracker updates."""
+        self.after(0, lambda: self._refresh_dashboard_display(data or self.current_data))
+
     def _toggle_startup(self):
         enabled = self.startup_var.get() == 'on'
         sync_startup_setting(enabled)
@@ -504,9 +508,9 @@ class Dashboard(ctk.CTk):
         except Exception as e:
             print(f'[Dashboard] News fetch error: {e}')
 
-        # Update display with current data
+        # SAFE: Marshals execution back to Tkinter main loop
         if self.current_data:
-            self._refresh_dashboard_display(self.current_data)
+            self.after(0, lambda data=self.current_data: self._refresh_dashboard_display(data))
 
 
     def _make_card(self, parent, title, value, subtitle, color, col):
@@ -691,6 +695,10 @@ class Dashboard(ctk.CTk):
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
         import datetime
         import bisect as _bisect
+
+        # Prevent memory leaks by explicitly clearing/closing previous figures
+        plt.clf()
+        plt.close('all')
 
         # Clear existing chart widgets
         for widget in self.chart_container.winfo_children():
@@ -1943,8 +1951,24 @@ class Dashboard(ctk.CTk):
 
 
     def _start_scheduler(self):
-        self.scheduler = GoldScheduler(on_update=self._on_scheduler_update)
-        self.scheduler.start()
+        if self.scheduler is None:
+            self.scheduler = GoldScheduler(on_update=self._on_scheduler_update)
+            self.scheduler.start()
+            self.owns_scheduler = True
+        else:
+            prev_callback = getattr(self.scheduler, 'on_update', None)
+            if prev_callback and prev_callback != self._on_scheduler_update:
+                def chained_update(data):
+                    try:
+                        prev_callback(data)
+                    except Exception as e:
+                        print(f'[SchedulerCallback] Error: {e}')
+                    self._on_scheduler_update(data)
+                self.scheduler.on_update = chained_update
+            else:
+                self.scheduler.on_update = self._on_scheduler_update
+            self.owns_scheduler = False
+
         self.after(800, self._fetch_in_background)
 
 

@@ -30,8 +30,11 @@ def get_score_color(score):
 
 
 class StartupPopup(ctk.CTk):
-    def __init__(self):
+    def __init__(self, scheduler=None):
         super().__init__()
+
+        self.scheduler      = scheduler
+        self.owns_scheduler = scheduler is None
 
         # ── Borderless window ──
         self.overrideredirect(True)       # removes title bar completely
@@ -261,8 +264,24 @@ class StartupPopup(ctk.CTk):
             latest['sell_label'] = get_sell_label(latest.get('sell_score') or 51)
             self._update_display(latest)
 
-        self.scheduler = GoldScheduler(on_update=self._on_new_data)
-        self.scheduler.start()
+        if self.scheduler is None:
+            self.scheduler = GoldScheduler(on_update=self._on_new_data)
+            self.scheduler.start()
+            self.owns_scheduler = True
+        else:
+            prev_callback = getattr(self.scheduler, 'on_update', None)
+            if prev_callback and prev_callback != self._on_new_data:
+                def chained_update(data):
+                    try:
+                        prev_callback(data)
+                    except Exception as e:
+                        print(f'[StartupPopupCallback] Error: {e}')
+                    self._on_new_data(data)
+                self.scheduler.on_update = chained_update
+            else:
+                self.scheduler.on_update = self._on_new_data
+            self.owns_scheduler = False
+
         self.after(500, self._fetch_now)
 
     def _fetch_now(self):
@@ -282,12 +301,12 @@ class StartupPopup(ctk.CTk):
 
     def _launch_dashboard(self):
         from ui.dashboard import Dashboard
-        app = Dashboard()
+        app = Dashboard(scheduler=self.scheduler)
         app.protocol('WM_DELETE_WINDOW', app.on_closing)
         app.mainloop()
 
     def on_closing(self):
-        if self.scheduler:
+        if getattr(self, 'owns_scheduler', False) and self.scheduler:
             self.scheduler.stop()
         self._fade_out(callback=self.destroy)
 
