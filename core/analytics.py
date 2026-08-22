@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
     sys.path.append(_project_root())
 
-from database.db_manager import get_price_history
+from database.db_manager import get_price_history, get_karat_adjusted_price
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -500,8 +500,8 @@ def score_trend_strength(prices: list[float], momentum: Optional[float]) -> Tren
 
 def compute_support_resistance(prices: list[float], current_price: float) -> SupportResistanceResult:
     """
-    Identify support & resistance levels using dynamic ATR/percentage price clustering.
-    Dynamic binning ensures reliability across any gold price scale.
+    Identify support & resistance levels using dynamic price clustering and continuous proximity functions.
+    Ensures that small price movements produce progressive, continuous score variations without sharp boundary jumps.
     """
     _EMPTY = SupportResistanceResult(
         support=None,
@@ -536,70 +536,58 @@ def compute_support_resistance(prices: list[float], current_price: float) -> Sup
     if not significant:
         significant = sorted(bin_counts.keys())
 
-    support_levels = [p for p in significant if p <= current_price]
-    resistance_levels = [p for p in significant if p >= current_price]
+    # Identify structural support (floor) and resistance (ceiling) from cluster distribution
+    support_candidates = [p for p in significant if p <= base_ref]
+    resist_candidates = [p for p in significant if p >= base_ref]
 
-    nearest_support = max(support_levels) if support_levels else None
-    nearest_resist = min(resistance_levels) if resistance_levels else None
+    strongest_support = max(support_candidates, key=lambda p: bin_counts.get(p, 0)) if support_candidates else min(significant)
+    strongest_resist = max(resist_candidates, key=lambda p: bin_counts.get(p, 0)) if resist_candidates else max(significant)
 
-    strongest_support = max(support_levels, key=lambda p: bin_counts.get(p, 0)) if support_levels else None
-    strongest_resist = max(resistance_levels, key=lambda p: bin_counts.get(p, 0)) if resistance_levels else None
+    nearest_support = max([p for p in significant if p <= current_price], default=min(significant))
+    nearest_resist = min([p for p in significant if p >= current_price], default=max(significant))
 
-    # Proximity scale: 0.8% of spot price
-    sigma = current_price * 0.008
+    # Proximity scale: 0.8% of spot price (smoothing window)
+    sigma = max(20.0, current_price * 0.008)
 
-    def _smooth_level_influence(d: float, s: float) -> float:
-        """
-        C1 smooth signed proximity influence:
-        h(d) = sign(d) * (3*u^2 - 2*u^3) * 6.0 for u = min(1, |d|/s).
-        Returns +6.0 for d >= s (above support), -6.0 for d <= -s (below resistance), 0.0 at d=0.
-        """
-        if s <= 0:
-            return 0.0
-        abs_d = abs(d)
-        if abs_d >= s:
-            return 6.0 if d > 0 else -6.0
-        u = abs_d / s
-        factor = 3.0 * (u ** 2) - 2.0 * (u ** 3)
-        return (factor * 6.0) if d > 0 else (-factor * 6.0)
-
-    # Base range position modifier
-    base_modifier = 0.0
-    if nearest_support and nearest_resist and nearest_resist > nearest_support:
-        range_size = nearest_resist - nearest_support
-        position = (current_price - nearest_support) / range_size
-        base_modifier = (0.5 - max(0.0, min(1.0, position))) * 6.0
-
-    # Calculate smooth proximity modifier
-    d_sup = (current_price - nearest_support) if nearest_support is not None else 0.0
-    d_res = (current_price - nearest_resist) if nearest_resist is not None else 0.0
-
-    if nearest_support and nearest_resist and nearest_resist > nearest_support:
-        mod_sup = _smooth_level_influence(d_sup, sigma)
-        mod_res = _smooth_level_influence(d_res, sigma)
-        modifier = max(-6.0, min(6.0, (mod_sup + mod_res) * 0.5))
-    elif nearest_support is not None:
-        modifier = _smooth_level_influence(d_sup, sigma)
-    elif nearest_resist is not None:
-        modifier = _smooth_level_influence(d_res, sigma)
+    # Continuous proximity scoring
+    # Proximity to support increases buy score (+6.0 max)
+    # Proximity to resistance decreases buy score (-6.0 max)
+    if strongest_resist > strongest_support:
+        range_size = strongest_resist - strongest_support
+        pos = (current_price - strongest_support) / range_size
+        
+        if current_price < strongest_support:
+            dist = strongest_support - current_price
+            modifier = 6.0 * math.exp(-dist / (sigma * 2.0))
+        elif current_price > strongest_resist:
+            dist = current_price - strongest_resist
+            modifier = -6.0 * math.exp(-dist / (sigma * 2.0))
+        else:
+            # Smooth C1 interpolation across the channel from +6.0 at support to -6.0 at resistance
+            u = max(0.0, min(1.0, pos))
+            modifier = 6.0 * (1.0 - 2.0 * (3.0 * (u ** 2) - 2.0 * (u ** 3)))
     else:
-        modifier = 0.0
+        # Single cluster fallback
+        dist = current_price - strongest_support
+        modifier = 6.0 * math.exp(-(dist ** 2) / (2.0 * (sigma ** 2))) if dist <= 0 else -6.0 * math.exp(-(dist ** 2) / (2.0 * (sigma ** 2)))
 
-    at_support = nearest_support is not None and abs(d_sup) <= sigma
-    at_resistance = nearest_resist is not None and abs(d_res) <= sigma
+    modifier = max(-6.0, min(6.0, modifier))
+
+    at_support = nearest_support is not None and abs(current_price - nearest_support) <= sigma
+    at_resistance = nearest_resist is not None and abs(current_price - nearest_resist) <= sigma
+
+    d_sup = abs(current_price - nearest_support) if nearest_support is not None else 0.0
+    d_res = abs(current_price - nearest_resist) if nearest_resist is not None else 0.0
 
     parts: list[str] = []
     if at_support and nearest_support:
-        parts.append(f"spot price (₹{current_price:,.0f}) is testing support near ₹{nearest_support:,.0f} (-{abs(d_sup)/current_price*100:.2f}% distance)")
+        parts.append(f"spot price (₹{current_price:,.0f}) is testing support near ₹{nearest_support:,.0f} (-{d_sup/current_price*100:.2f}% distance)")
     elif at_resistance and nearest_resist:
-        parts.append(f"spot price (₹{current_price:,.0f}) is testing overhead resistance near ₹{nearest_resist:,.0f} (+{abs(d_res)/current_price*100:.2f}% distance)")
-    elif nearest_support and nearest_resist:
+        parts.append(f"spot price (₹{current_price:,.0f}) is testing overhead resistance near ₹{nearest_resist:,.0f} (+{d_res/current_price*100:.2f}% distance)")
+    elif nearest_support and nearest_resist and nearest_resist > nearest_support:
         range_size = nearest_resist - nearest_support
-        if range_size > 0:
-            position = (current_price - nearest_support) / range_size
-            parts.append(f"price is positioned at {position*100:.0f}% of the ₹{nearest_support:,.0f}–₹{nearest_resist:,.0f} trading range")
-        else:
-            parts.append(f"support at ₹{nearest_support:,.0f}, resistance at ₹{nearest_resist:,.0f}")
+        position = (current_price - nearest_support) / range_size
+        parts.append(f"price is positioned at {position*100:.0f}% of the ₹{nearest_support:,.0f}–₹{nearest_resist:,.0f} trading range")
     elif nearest_support:
         parts.append(f"nearest support detected at ₹{nearest_support:,.0f}")
     elif nearest_resist:
@@ -614,7 +602,7 @@ def compute_support_resistance(prices: list[float], current_price: float) -> Sup
         nearest_resist=nearest_resist,
         at_support=at_support,
         at_resistance=at_resistance,
-        modifier=modifier,
+        modifier=round(modifier, 2),
         reasoning=reasoning,
     )
 
@@ -1011,6 +999,8 @@ def resolve_conflicts(
 # ── 5-TIER CONFIDENCE MODEL ────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
+STALE_DATA_CONFIDENCE_CAP = 45
+
 def compute_confidence_5tier(
     contributions: Dict[str, IndicatorContribution],
     prices: list[float],
@@ -1044,10 +1034,22 @@ def compute_confidence_5tier(
     else:
         agreement_pts = 5.0
 
+    # Distinguish genuine low volatility from stale / frozen / flat price feeds
+    recent_prices = prices[-15:] if len(prices) >= 15 else prices
+    distinct_count = len(set(recent_prices))
+    is_frozen_feed = (len(prices) >= 5 and distinct_count <= 1)
+    is_very_flat = (len(prices) >= 8 and distinct_count <= 2 and (volatility is None or volatility < 0.5))
+
     current_price = prices[-1] if prices else 1.0
-    if volatility and current_price > 0:
+    if is_frozen_feed:
+        # Static/frozen feed gets 0 volatility points (does not imply healthy market certainty)
+        vol_pts = 0.0
+    elif volatility is not None and volatility > 0 and current_price > 0:
         vol_pct = (volatility / current_price) * 100.0
+        # Normal fresh data with healthy low-to-moderate volatility gets up to 10 points
         vol_pts = max(0.0, _linear_interpolate(vol_pct, 0.2, 2.5, 10.0, 0.0))
+    elif is_very_flat:
+        vol_pts = 2.0
     else:
         vol_pts = 5.0
 
@@ -1064,7 +1066,12 @@ def compute_confidence_5tier(
     if has_active_conflict:
         confidence = min(confidence, 69)
 
-    # Strict Cap Safeguards: Never output High/Very High if key history is missing
+    # Strict Cap Safeguards:
+    # 1. Stale / frozen feed cap: flat data cannot masquerade as high certainty
+    if is_frozen_feed:
+        confidence = min(confidence, STALE_DATA_CONFIDENCE_CAP)
+
+    # 2. Never output High/Very High if key history is missing
     if len(prices) < 14:
         confidence = min(confidence, 45)
     if contributions.get("ma30") and contributions["ma30"].status != "active":
@@ -1336,6 +1343,12 @@ def run_analytics(
 
     # Data Quality Audit Notes
     quality_notes: list[str] = []
+    recent_prices = prices[-15:] if len(prices) >= 15 else prices
+    distinct_count = len(set(recent_prices))
+    is_frozen_feed = (len(prices) >= 5 and distinct_count <= 1)
+
+    if is_frozen_feed:
+        quality_notes.append("Market feed is static/frozen (zero price variation across recent readings) — confidence capped.")
     if outliers_cleaned > 0:
         quality_notes.append(f"Hampel filter cleaned {outliers_cleaned} single-point price outlier(s).")
     if len(prices) < 30:

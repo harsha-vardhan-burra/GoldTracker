@@ -52,7 +52,6 @@ class StartupPopup(ctk.CTk):
         y = sh - height - taskbar_offset
         self.geometry(f'{width}x{height}+{x}+{y}')
 
-        self.scheduler = None
         self._build_ui()
         self._start_scheduler()
 
@@ -269,17 +268,7 @@ class StartupPopup(ctk.CTk):
             self.scheduler.start()
             self.owns_scheduler = True
         else:
-            prev_callback = getattr(self.scheduler, 'on_update', None)
-            if prev_callback and prev_callback != self._on_new_data:
-                def chained_update(data):
-                    try:
-                        prev_callback(data)
-                    except Exception as e:
-                        print(f'[StartupPopupCallback] Error: {e}')
-                    self._on_new_data(data)
-                self.scheduler.on_update = chained_update
-            else:
-                self.scheduler.on_update = self._on_new_data
+            self.scheduler.add_listener(self._on_new_data)
             self.owns_scheduler = False
 
         self.after(500, self._fetch_now)
@@ -306,8 +295,11 @@ class StartupPopup(ctk.CTk):
         app.mainloop()
 
     def on_closing(self):
-        if getattr(self, 'owns_scheduler', False) and self.scheduler:
-            self.scheduler.stop()
+        if self.scheduler:
+            if getattr(self, 'owns_scheduler', False):
+                self.scheduler.stop()
+            else:
+                self.scheduler.remove_listener(self._on_new_data)
         self._fade_out(callback=self.destroy)
 
 

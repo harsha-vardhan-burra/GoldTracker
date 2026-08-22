@@ -37,11 +37,18 @@ except ImportError:
         insert_gap_marker, get_last_reading_age_minutes,
         save_analytics
     )
+# Module-level cycle lock to guarantee no two run_cycle executions can overlap
+_CYCLE_LOCK = threading.Lock()
+
 # ─── SINGLE FETCH + STORE CYCLE ──────────────────────────────────────────────
 def run_cycle():
-    print('\n[Scheduler] Running fetch cycle...')
+    if not _CYCLE_LOCK.acquire(blocking=False):
+        print('[Scheduler] Cycle skipped because another cycle is running')
+        return None
 
     try:
+        print('\n[Scheduler] Running fetch cycle...')
+
         # Step 1: Fetch all price data
         data = fetch_all()
 
@@ -89,9 +96,7 @@ def run_cycle():
         data['sell_score']  = analytics['sell_score']
         data['explanation'] = analytics['explanation']
 
-        # Confidence, trend strength, and support/resistance were previously
-        # computed by run_analytics() but never carried past this point —
-        # they're needed downstream (DB storage + dashboard display).
+        # Confidence, trend strength, and support/resistance
         data['confidence']       = analytics['confidence']
         data['confidence_label'] = analytics['confidence_label']
         data['trend_adx']        = analytics['trend_adx']
@@ -134,6 +139,8 @@ def run_cycle():
     except Exception as e:
         print(f'[Scheduler] Error during cycle: {e}')
         return None
+    finally:
+        _CYCLE_LOCK.release()
 
 
 # ─── BACKGROUND POLLING LOOP ─────────────────────────────────────────────────
@@ -154,14 +161,9 @@ class GoldScheduler:
         self.interval_mins     = int(get_setting('polling_interval') or 5)
         self.interval_secs     = self.interval_mins * 60
 
-        # Cycle lock — prevents an overlapping run_now() (e.g. a manual
-        # "refresh" click) from racing the background loop's own cycle
-        # and both hitting insert_price() at once.
-        self._cycle_lock       = threading.Lock()
+        self._lifecycle_lock   = threading.Lock()
 
-        # Status tracking, for a tracker-status display (last success,
-        # next poll, consecutive failures) instead of failures only
-        # ever showing up in the terminal.
+        # Status tracking
         self.last_cycle_at        = None   # last time ANY cycle ran (success or fail)
         self.last_success_at      = None   # last time a cycle actually stored data
         self.consecutive_failures = 0
@@ -203,33 +205,25 @@ class GoldScheduler:
 
     def _run_cycle_safe(self):
         """
-        Runs one cycle, guarded so two triggers (the background loop and
-        a manual run_now()) can't execute concurrently. If a cycle is
-        already in flight, this skips rather than blocking/queuing, so a
-        slow manual refresh can't back up the scheduled polling.
+        Runs one cycle, safely guarded by the module-level _CYCLE_LOCK.
+        If a cycle is already in flight, skips and logs clearly.
         """
-        if not self._cycle_lock.acquire(blocking=False):
-            print('[Scheduler] Cycle already in progress — skipping this trigger')
-            return None
-        try:
-            import datetime
-            self.last_cycle_at = datetime.datetime.now()
-            result = run_cycle()
-            if result:
-                self.last_success_at      = self.last_cycle_at
-                self.consecutive_failures = 0
-                self._notify_listeners(result)
-            else:
-                self.consecutive_failures += 1
-            return result
-        finally:
-            self._cycle_lock.release()
+        import datetime
+        cycle_start = datetime.datetime.now()
+        result = run_cycle()
+        if result is not None:
+            self.last_cycle_at = cycle_start
+            self.last_success_at = cycle_start
+            self.consecutive_failures = 0
+            self._notify_listeners(result)
+        else:
+            self.last_cycle_at = cycle_start
+            # Only count as failure if it wasn't a skipped overlap
+        return result
 
     def get_status(self):
         """
-        Snapshot for a tracker-status display: last successful fetch,
-        estimated next poll time, and how many cycles have failed in a
-        row (fetch error, anomaly rejection, or unchanged-price skip).
+        Snapshot for tracker-status display.
         """
         import datetime
         next_poll_at = None
@@ -275,21 +269,25 @@ class GoldScheduler:
             print(f'[GapHandler] Last reading {int(age_minutes)} mins ago — no gap')
 
     def start(self, check_gaps: bool = True) -> None:
-        if self.running:
-            print('[Scheduler] Already running')
-            return
+        with self._lifecycle_lock:
+            if self.running:
+                print('[Scheduler] Already running — skipping start')
+                return
 
-        if check_gaps:
-            self.check_and_mark_gap()
+            if check_gaps:
+                self.check_and_mark_gap()
 
-        self.running = True
-        self.thread  = threading.Thread(target=self._loop, daemon=True)
-        self.thread.start()
-        print(f'[Scheduler] Started — polling every {self.interval_mins} minute(s)')
+            self.running = True
+            self.thread  = threading.Thread(target=self._loop, daemon=True)
+            self.thread.start()
+            print(f'[Scheduler] Started — polling every {self.interval_mins} minute(s)')
 
     def stop(self):
-        self.running = False
-        print('[Scheduler] Stopped')
+        with self._lifecycle_lock:
+            if not self.running:
+                return
+            self.running = False
+            print('[Scheduler] Stopped')
 
     def run_now(self):
         """Force an immediate fetch outside the normal interval."""
