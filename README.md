@@ -64,7 +64,7 @@ Unlike simple price trackers, GoldTracker continuously analyzes market condition
 
 | Source                                         | Role                               | API Key Required          |
 | ---------------------------------------------- | ---------------------------------- | ------------------------- |
-| [gold-api.com](https://api.gold-api.com)       | International spot price (primary) | No                        |
+| [gold-api.com](https://gold-api.com)           | International spot price (primary) | No                        |
 | [GoldAPI.io](https://goldapi.io)               | Spot price fallback                | Yes (optional, free tier) |
 | [Frankfurter API](https://api.frankfurter.dev) | Live USD/INR conversion            | No                        |
 | [GoodReturns.in](https://goodreturns.in)       | Indian city retail rates           | No                        |
