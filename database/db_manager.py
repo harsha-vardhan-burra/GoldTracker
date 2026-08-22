@@ -571,15 +571,38 @@ def get_all_alerts():
     conn.close()
     return [dict(row) for row in rows]
 
-def cancel_alert(alert_id):
+def get_karat_adjusted_price(price_24k: float, karat: str) -> float:
+    """
+    Returns the karat-adjusted gold price per gram based on 24K baseline price.
+    Supports 24K (1.0), 22K (22/24), and 18K (18/24).
+    """
+    if price_24k is None or price_24k <= 0:
+        return 0.0
+    karat_clean = str(karat).strip().upper()
+    if karat_clean in ('24K', '24'):
+        return float(price_24k)
+    elif karat_clean in ('22K', '22'):
+        return float(price_24k) * (22.0 / 24.0)
+    elif karat_clean in ('18K', '18'):
+        return float(price_24k) * (18.0 / 24.0)
+    else:
+        raise ValueError(f"Unsupported karat: {karat}")
+
+def cancel_alert(alert_id: int) -> bool:
+    """
+    Guarded alert cancellation. Only active alerts can transition to cancelled.
+    Returns True if transitioned successfully, False if alert was not active or not found.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE alerts SET status = 'cancelled'
-        WHERE id = ?
+        WHERE id = ? AND status = 'active'
     ''', (alert_id,))
+    affected = cursor.rowcount
     conn.commit()
     conn.close()
+    return affected > 0
 
 def add_alert(alert_type, target_price):
     conn = get_connection()
@@ -591,16 +614,22 @@ def add_alert(alert_type, target_price):
     conn.close()
 
 
-def trigger_alert(alert_id):
+def trigger_alert(alert_id: int) -> bool:
+    """
+    Guarded alert triggering. Only active alerts can transition to triggered.
+    Returns True if transitioned successfully, False if alert was not active or not found.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE alerts
         SET status = 'triggered', triggered_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = ? AND status = 'active'
     ''', (alert_id,))
+    affected = cursor.rowcount
     conn.commit()
     conn.close()
+    return affected > 0
 
 def initialize_portfolio_table():
     conn = get_connection()
@@ -659,19 +688,44 @@ def delete_purchase(purchase_id):
     conn.close()
 
 
-def get_portfolio_summary():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT 
-            SUM(grams)          as total_grams,
-            SUM(total_invested) as total_invested,
-            AVG(price_per_gram) as avg_buy_price
-        FROM portfolio
-    ''')
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
+def get_portfolio_summary(current_price_24k: float = None) -> dict:
+    """
+    Returns portfolio summary stats: total_grams, total_invested, avg_buy_price,
+    and if current_price_24k is supplied, karat-adjusted current_value, pnl, and pnl_pct.
+    """
+    purchases = get_portfolio()
+    if not purchases:
+        return {
+            'total_grams': 0.0,
+            'total_invested': 0.0,
+            'avg_buy_price': None,
+            'current_value': 0.0,
+            'pnl': 0.0,
+            'pnl_pct': 0.0,
+        }
+
+    total_grams = sum(p['grams'] for p in purchases)
+    total_invested = sum(p['total_invested'] for p in purchases)
+    avg_buy_price = round(total_invested / total_grams, 2) if total_grams > 0 else None
+
+    current_value = 0.0
+    if current_price_24k and current_price_24k > 0:
+        for p in purchases:
+            adjusted_price = get_karat_adjusted_price(current_price_24k, p['karat'])
+            current_value += p['grams'] * adjusted_price
+        current_value = round(current_value, 2)
+
+    pnl = round(current_value - total_invested, 2) if (current_price_24k and current_price_24k > 0) else 0.0
+    pnl_pct = round((pnl / total_invested) * 100.0, 2) if (total_invested and current_price_24k and current_price_24k > 0) else 0.0
+
+    return {
+        'total_grams': round(total_grams, 3),
+        'total_invested': round(total_invested, 2),
+        'avg_buy_price': avg_buy_price,
+        'current_value': current_value,
+        'pnl': pnl,
+        'pnl_pct': pnl_pct,
+    }
 
 # --- Quick test ---
 if __name__ == '__main__':

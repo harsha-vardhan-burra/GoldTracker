@@ -94,24 +94,29 @@ def check_alerts(current_price_24k):
             )
 
         if triggered:
-            # Mark as triggered in DB first
-            trigger_alert(alert_id)
-            triggered_ids.append(alert_id)
+            # Mark as triggered in DB first (conditional on status='active')
+            if trigger_alert(alert_id):
+                triggered_ids.append(alert_id)
 
-            # Fire notification + sound in separate thread
-            # so it doesn't block the main fetch cycle
-            t = threading.Thread(
-                target=_fire_alert_async,
-                args=(title, message),
-                daemon=True
-            )
-            t.start()
+                # Fire notification + sound in separate thread
+                # so it doesn't block the main fetch cycle
+                t = threading.Thread(
+                    target=_fire_alert_async,
+                    args=(title, message),
+                    daemon=True
+                )
+                t.start()
 
-            print(
-                f'[AlertEngine] TRIGGERED — {alert_type.upper()} alert '
-                f'| Target: ₹{target_price:,.0f} '
-                f'| Current: ₹{current_price_24k:,.2f}'
-            )
+                print(
+                    f'[AlertEngine] TRIGGERED — {alert_type.upper()} alert '
+                    f'| Target: ₹{target_price:,.0f} '
+                    f'| Current: ₹{current_price_24k:,.2f}'
+                )
+            else:
+                print(
+                    f'[AlertEngine] Alert {alert_id} already changed state '
+                    f'— skipping trigger and notification'
+                )
 
     return triggered_ids
 

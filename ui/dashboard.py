@@ -1518,13 +1518,15 @@ class Dashboard(ctk.CTk):
 
     def _cancel_alert(self, alert_id):
         from database.db_manager import cancel_alert
-        cancel_alert(alert_id)
+        success = cancel_alert(alert_id)
+        if not success:
+            print(f'[Dashboard] Alert {alert_id} could not be cancelled (state already changed).')
         # Rebuild entire tab to refresh summary cards + list together
         self._show_tab('alert_history')
 
     def _add_purchase(self):
         try:
-            from database.db_manager import add_purchase
+            from database.db_manager import add_purchase, get_portfolio
             import datetime
 
             date_str = self.port_date.get().strip()
@@ -1547,8 +1549,9 @@ class Dashboard(ctk.CTk):
                 text=f"✓ Added {grams}g of {karat} at ₹{price:,.0f}/gram",
                 text_color=GREEN
             )
-            self._render_portfolio_rows()
-            self._update_portfolio_summary()
+            purchases = get_portfolio()
+            self._render_portfolio_rows(purchases)
+            self._update_portfolio_summary(purchases)
 
         except ValueError as e:
             self.port_msg.configure(
@@ -1557,13 +1560,14 @@ class Dashboard(ctk.CTk):
             )
 
 
-    def _render_portfolio_rows(self):
+    def _render_portfolio_rows(self, purchases=None):
         for w in self.port_list_frame.winfo_children():
             w.destroy()
 
-        from database.db_manager import get_portfolio, delete_purchase
+        from database.db_manager import get_portfolio, get_karat_adjusted_price
 
-        purchases = get_portfolio()
+        if purchases is None:
+            purchases = get_portfolio()
 
         if not purchases:
             ctk.CTkLabel(self.port_list_frame,
@@ -1580,13 +1584,8 @@ class Dashboard(ctk.CTk):
             buy_price    = p['price_per_gram']
             invested     = p['total_invested']
 
-            # Calculate current value based on karat
-            if karat == '24K':
-                curr_price = current_price
-            elif karat == '22K':
-                curr_price = current_price * (22/24)
-            else:
-                curr_price = current_price * (18/24)
+            # Calculate current value based on centralized karat helper
+            curr_price = get_karat_adjusted_price(current_price, karat) if current_price else 0.0
 
             current_val = round(grams * curr_price, 2) if curr_price else 0
             pnl         = round(current_val - invested, 2) if curr_price else 0
@@ -1626,29 +1625,50 @@ class Dashboard(ctk.CTk):
 
 
     def _delete_purchase(self, purchase_id):
-        from database.db_manager import delete_purchase
+        from database.db_manager import delete_purchase, get_portfolio
         delete_purchase(purchase_id)
-        self._render_portfolio_rows()
-        self._update_portfolio_summary()
+        purchases = get_portfolio()
+        self._render_portfolio_rows(purchases)
+        self._update_portfolio_summary(purchases)
 
 
-    def _update_portfolio_summary(self):
-        from database.db_manager import get_portfolio_summary, get_portfolio
+    def _update_portfolio_summary(self, purchases=None):
+        from database.db_manager import get_portfolio, get_karat_adjusted_price
 
-        summary = get_portfolio_summary()
-        if not summary or not summary['total_grams']:
+        if purchases is None:
+            purchases = get_portfolio()
+
+        if not purchases:
+            if hasattr(self, 'port_grams'):
+                self.port_grams.configure(text="0.00g")
+            if hasattr(self, 'port_invested'):
+                self.port_invested.configure(text="₹0")
+            if hasattr(self, 'port_avg_price'):
+                self.port_avg_price.configure(text='---')
+            if hasattr(self, 'port_value'):
+                self.port_value.configure(text='---')
+            if hasattr(self, 'port_pnl'):
+                self.port_pnl.configure(text='---', text_color=TEXT)
+            self._update_suggested_sell_zone(None, self.current_data.get('price_24k') or 0)
             return
 
-        total_grams    = summary['total_grams'] or 0
-        total_invested = summary['total_invested'] or 0
+        total_grams    = sum(p['grams'] for p in purchases)
+        total_invested = sum(p['total_invested'] for p in purchases)
         current_price  = self.current_data.get('price_24k') or 0
-        current_value  = round(total_grams * current_price, 2) if current_price else 0
+
+        # Karat-adjusted valuation across all purchases
+        current_value = 0.0
+        if current_price and current_price > 0:
+            for p in purchases:
+                adjusted_price = get_karat_adjusted_price(current_price, p['karat'])
+                current_value += p['grams'] * adjusted_price
+            current_value = round(current_value, 2)
+
         pnl            = round(current_value - total_invested, 2) if current_price else 0
         pnl_pct        = round((pnl / total_invested) * 100, 2) if total_invested else 0
         pnl_color      = GREEN if pnl >= 0 else RED
 
-        # Weighted average buy price (24K-equivalent isn't tracked per-karat
-        # here — this is total spent / total grams, same basis as the table).
+        # Weighted average buy price
         avg_buy_price = round(total_invested / total_grams, 2) if total_grams else None
 
         if hasattr(self, 'port_grams'):
@@ -2065,11 +2085,7 @@ class Dashboard(ctk.CTk):
             self.owns_scheduler = True
         else:
             self.owns_scheduler = False
-
-        if self.scheduler:
-            self.scheduler.on_fetch_complete = lambda data: self.after(
-                0, lambda: self._refresh_dashboard_display(data)
-            )
+            self.scheduler.add_listener(self._on_scheduler_update)
 
         self.after(800, self._fetch_in_background)
 
@@ -2108,17 +2124,22 @@ class Dashboard(ctk.CTk):
 
 
     def on_closing(self):
-        # Don't stop scheduler — keep running in tray
+        if self.scheduler:
+            if self.owns_scheduler:
+                self.scheduler.stop()
+            else:
+                self.scheduler.remove_listener(self._on_scheduler_update)
         self.destroy()
-        # Show Windows notification telling user app is in tray
+        # Show Windows notification telling user app is in tray (when tray is running)
         try:
-            from plyer import notification
-            notification.notify(
-                title    = 'GoldTracker is still running',
-                message  = 'Monitoring gold prices in the background.\nRight-click the tray icon to quit.',
-                app_name = 'GoldTracker',
-                timeout  = 4,
-            )
+            if not self.owns_scheduler:
+                from plyer import notification
+                notification.notify(
+                    title    = 'GoldTracker is still running',
+                    message  = 'Monitoring gold prices in the background.\nRight-click the tray icon to quit.',
+                    app_name = 'GoldTracker',
+                    timeout  = 4,
+                )
         except Exception:
             pass
 
